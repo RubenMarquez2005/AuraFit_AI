@@ -56,3 +56,9 @@
 - Primer push de la rama main completado.
 - URL del repositorio: https://github.com/RubenMarquez2005/AuraFit_AI
 - Identidad global de Git configurada (user.name y user.email) para evitar avisos en commits.
+
+### Revision de memoria TFG y requisitos de profesora
+- Se actualizo memoria_tfg.md para pasar de plantilla a documento real de estado.
+- Se anadio una matriz de requisitos solicitados por la profesora con estado de cumplimiento.
+- Se incorporaron resultados tecnicos ya validados: Tarea 1 y Tarea 2 (login).
+- Se dejo documentado el requisito operativo para runtime real: .env valido y usuarios con hash bcrypt.
