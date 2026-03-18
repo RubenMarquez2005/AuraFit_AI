@@ -38,6 +38,17 @@
 - El usuario `root@%` autentica, pero no tiene privilegios sobre `aurafit_db` (solo USAGE).
 - Se intento correccion automatica desde terminal, pero requiere accion con sudo local para recuperar privilegios.
 
+### Resolucion de incidencia MySQL
+- Se ejecuto recuperacion de privilegios y se restauro acceso a `aurafit_db` para `root@%`.
+- Se creo/confirmo la base de datos `aurafit_db`.
+- Se confirmo conexion de backend con `verify_database_connection()` devolviendo True.
+- Se crearon tablas ORM y se sembraron roles base.
+
+### Validacion funcional login con BBDD real
+- Se creo usuario de prueba con script de alta y hash bcrypt.
+- Se valido autenticacion contra BBDD devolviendo rol `cliente`.
+- Se fijo compatibilidad de librerias de hashing (`passlib` + `bcrypt==4.0.1`).
+
 ### Estado Git y GitHub
 - Repositorio Git inicializado en rama main.
 - Commits creados para dejar trazabilidad del avance.
