@@ -17,3 +17,14 @@
 
 ### Siguiente paso (tarea 2)
 - Definir endpoints CRUD iniciales para roles, usuarios y perfiles de salud.
+
+### Cierre de la tarea 1
+- Se tradujeron comentarios y docstrings del backend principal a espanol.
+- Se eliminaron iconos y texto visual en scripts Python.
+- Se valido sintaxis con compilacion de archivos Python.
+- Se comprobo la funcion de verificacion de DB: la logica funciona, pero el entorno devuelve acceso denegado por credenciales MySQL.
+
+### Estado Git y GitHub
+- Repositorio Git inicializado en rama main.
+- Commits creados para dejar trazabilidad del avance.
+- Pendiente conectar remoto de GitHub para ejecutar push.
