@@ -27,4 +27,6 @@
 ### Estado Git y GitHub
 - Repositorio Git inicializado en rama main.
 - Commits creados para dejar trazabilidad del avance.
-- Pendiente conectar remoto de GitHub para ejecutar push.
+- Remoto origin configurado hacia GitHub.
+- Primer push de la rama main completado.
+- URL del repositorio: https://github.com/RubenMarquez2005/AuraFit_AI
