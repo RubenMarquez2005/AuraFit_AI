@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from urllib.parse import quote_plus
 
 
 class Settings(BaseSettings):
@@ -27,9 +28,11 @@ class Settings(BaseSettings):
     @property
     def DATABASE_URL(self) -> str:
         """Construye la URL de conexion MySQL para SQLAlchemy."""
+        user = quote_plus(self.DB_USER)
+        password = quote_plus(self.DB_PASSWORD)
         return (
             f"mysql+mysqlconnector://"
-            f"{self.DB_USER}:{self.DB_PASSWORD}@"
+            f"{user}:{password}@"
             f"{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         )
 

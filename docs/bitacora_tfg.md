@@ -32,6 +32,11 @@
 - La respuesta devuelve: usuario_id, nombre, email y rol.
 - Se valido que la ruta /login queda registrada en FastAPI.
 - Se agrego script `backend/scripts/crear_usuario.py` para dar de alta usuarios con hash bcrypt y rol.
+- Se ajusto `DATABASE_URL` para codificar usuario/contrasena con caracteres especiales (ejemplo: @).
+
+### Incidencia de entorno MySQL
+- El usuario `root@%` autentica, pero no tiene privilegios sobre `aurafit_db` (solo USAGE).
+- Se intento correccion automatica desde terminal, pero requiere accion con sudo local para recuperar privilegios.
 
 ### Estado Git y GitHub
 - Repositorio Git inicializado en rama main.
