@@ -31,6 +31,7 @@
 - Se consulta la tabla usuarios y su relacion con roles para devolver el rol del usuario.
 - La respuesta devuelve: usuario_id, nombre, email y rol.
 - Se valido que la ruta /login queda registrada en FastAPI.
+- Se agrego script `backend/scripts/crear_usuario.py` para dar de alta usuarios con hash bcrypt y rol.
 
 ### Estado Git y GitHub
 - Repositorio Git inicializado en rama main.

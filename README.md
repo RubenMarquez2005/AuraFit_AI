@@ -76,6 +76,23 @@ Respuesta esperada:
 }
 ```
 
+### Alta de usuarios (para pruebas)
+
+Los usuarios se guardan en la tabla `usuarios` y el rol se vincula por `rol_id`.
+
+Script recomendado (genera hash bcrypt automaticamente):
+
+```bash
+cd backend
+python3 scripts/crear_usuario.py \
+	--nombre "Ana Lopez" \
+	--email "ana@aurafit.ai" \
+	--password "AnaClave123" \
+	--rol cliente
+```
+
+Roles permitidos: `administrador`, `cliente`, `nutricionista`, `psicologo`, `coach`.
+
 ## Frontend
 
 ```bash
