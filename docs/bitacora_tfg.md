@@ -24,6 +24,14 @@
 - Se valido sintaxis con compilacion de archivos Python.
 - Se comprobo la funcion de verificacion de DB: la logica funciona, pero el entorno devuelve acceso denegado por credenciales MySQL.
 
+### Tarea 2 - Login
+- Se implemento endpoint POST /login.
+- El endpoint recibe email y password (tambien acepta clave contrasena para compatibilidad).
+- Se agrego verificacion de contrasena con passlib (bcrypt).
+- Se consulta la tabla usuarios y su relacion con roles para devolver el rol del usuario.
+- La respuesta devuelve: usuario_id, nombre, email y rol.
+- Se valido que la ruta /login queda registrada en FastAPI.
+
 ### Estado Git y GitHub
 - Repositorio Git inicializado en rama main.
 - Commits creados para dejar trazabilidad del avance.

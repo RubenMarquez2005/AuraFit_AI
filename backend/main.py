@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import settings
 from app.db import engine, verify_database_connection, Base
 from app.models import Rol, Usuario, PerfilSalud, RegistroDiario
+from app.api.auth import router as auth_router
 import logging
 
 # Configuracion basica de logs para desarrollo
@@ -74,6 +75,8 @@ async def shutdown_event():
 
 
 # Endpoints de salud
+
+app.include_router(auth_router)
 
 @app.get("/")
 async def root():

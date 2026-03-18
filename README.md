@@ -52,6 +52,30 @@ python3 run.py
 - http://localhost:8000/health
 - http://localhost:8000/health/db
 
+### Endpoint de autenticacion
+
+`POST /login`
+
+Ejemplo de body JSON:
+
+```json
+{
+	"email": "usuario@correo.com",
+	"password": "TuClave123"
+}
+```
+
+Respuesta esperada:
+
+```json
+{
+	"usuario_id": 1,
+	"nombre": "Nombre Usuario",
+	"email": "usuario@correo.com",
+	"rol": "cliente"
+}
+```
+
 ## Frontend
 
 ```bash
