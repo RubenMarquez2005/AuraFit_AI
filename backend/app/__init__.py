@@ -1,0 +1,3 @@
+"""
+AuraFit AI Backend Application
+"""
