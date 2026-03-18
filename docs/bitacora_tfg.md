@@ -30,3 +30,4 @@
 - Remoto origin configurado hacia GitHub.
 - Primer push de la rama main completado.
 - URL del repositorio: https://github.com/RubenMarquez2005/AuraFit_AI
+- Identidad global de Git configurada (user.name y user.email) para evitar avisos en commits.
