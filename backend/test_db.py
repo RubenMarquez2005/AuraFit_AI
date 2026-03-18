@@ -1,101 +1,68 @@
 #!/usr/bin/env python3
-"""
-Database Connection & Models Test Script
-Tests the database configuration and all models
-"""
+"""Prueba rapida de configuracion y conexion de base de datos."""
 
+import asyncio
 import sys
+from sqlalchemy import text
 from app.config.settings import settings
 from app.db import SessionLocal, verify_database_connection, engine, Base
 from app.models import Rol, Usuario, PerfilSalud, RegistroDiario
-import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
-def print_header(text):
-    """Print formatted header"""
+def print_titulo(texto: str) -> None:
+    """Imprime un titulo simple en consola."""
     print("\n" + "=" * 60)
-    print(f"  {text}")
-    print("=" * 60 + "\n")
+    print(texto)
+    print("=" * 60)
 
 
-async def test_database():
-    """Run all database tests"""
-    
-    print_header("AuraFit AI - Database Configuration Test")
-    
-    # 1. Test Settings
-    print("📋 Configuration:")
-    print(f"   App Name: {settings.APP_NAME}")
-    print(f"   Debug Mode: {settings.DEBUG}")
-    print(f"   DB Host: {settings.DB_HOST}")
-    print(f"   DB Port: {settings.DB_PORT}")
-    print(f"   DB Name: {settings.DB_NAME}")
-    print(f"   Database URL: {settings.DATABASE_URL}")
-    
-    # 2. Test Connection
-    print("\n🔌 Testing Database Connection...")
-    is_connected = await verify_database_connection()
-    if not is_connected:
-        print("   ✗ Connection failed!")
+async def test_database() -> bool:
+    """Ejecuta comprobaciones basicas de entorno y conexion."""
+    print_titulo("Prueba de base de datos - AuraFit AI")
+
+    print("Configuracion actual:")
+    print(f"- APP_NAME: {settings.APP_NAME}")
+    print(f"- DEBUG: {settings.DEBUG}")
+    print(f"- DB_HOST: {settings.DB_HOST}")
+    print(f"- DB_PORT: {settings.DB_PORT}")
+    print(f"- DB_NAME: {settings.DB_NAME}")
+
+    print("\nComprobando conexion...")
+    if not await verify_database_connection():
+        print("Resultado: conexion no disponible")
         return False
-    print("   ✓ Connection successful!")
-    
-    # 3. Create Tables
-    print("\n🗂️  Creating Tables...")
+
+    print("Resultado: conexion correcta")
+
     try:
+        # Garantiza que las tablas declaradas en modelos existan.
         Base.metadata.create_all(bind=engine)
-        print("   ✓ Tables created/verified")
+        print("Tablas verificadas")
     except Exception as e:
-        print(f"   ✗ Error creating tables: {e}")
+        print(f"Error al crear/verificar tablas: {e}")
         return False
-    
-    # 4. Test Models
-    print("\n📦 Testing Models:")
-    models = [
+
+    print("Modelos cargados:")
+    for nombre, model in [
         ("Rol", Rol),
         ("Usuario", Usuario),
         ("PerfilSalud", PerfilSalud),
         ("RegistroDiario", RegistroDiario),
-    ]
-    
-    for name, model in models:
-        print(f"   ✓ {name}: {model.__tablename__}")
-    
-    # 5. Test Session
-    print("\n🗄️  Testing Database Session...")
-    db = SessionLocal()
-    try:
-        db.execute("SELECT 1")
-        print("   ✓ Session query successful")
-    except Exception as e:
-        print(f"   ✗ Session error: {e}")
-        return False
-    finally:
-        db.close()
-    
-    # 6. Summary
-    print_header("✅ All Tests Passed!")
-    print("Your AuraFit AI backend is ready to use.\n")
-    print("📚 Next Steps:")
-    print("   1. Run: python3 run.py")
-    print("   2. Visit: http://localhost:8000/docs")
-    print("   3. Check: http://localhost:8000/health/db\n")
-    
+    ]:
+        print(f"- {nombre}: {model.__tablename__}")
+
+    # Valida una consulta minima de sesion.
+    with SessionLocal() as db:
+        db.execute(text("SELECT 1"))
+
+    print("Sesion de base de datos operativa")
     return True
 
 
 if __name__ == "__main__":
-    import asyncio
-    
-    print("\n")
     try:
-        success = asyncio.run(test_database())
-        sys.exit(0 if success else 1)
+        ok = asyncio.run(test_database())
+        sys.exit(0 if ok else 1)
     except Exception as e:
-        print(f"\n❌ Test failed: {e}\n")
-        import traceback
-        traceback.print_exc()
+        print(f"Error en la prueba: {e}")
         sys.exit(1)
