@@ -1,5 +1,9 @@
 from pydantic_settings import BaseSettings
 from urllib.parse import quote_plus
+from pathlib import Path
+
+
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
@@ -19,10 +23,19 @@ class Settings(BaseSettings):
 
     # Configuracion de la API
     API_HOST: str = "0.0.0.0"
-    API_PORT: int = 8000
+    API_PORT: int = 8001
+
+    # Configuracion de autenticacion
+    AUTH_SECRET_KEY: str = "aurafit_dev_secret_cambiar"
+    AUTH_TOKEN_EXP_MINUTES: int = 1440
+
+    # Configuracion del servicio de IA (Gemini)
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+    IA_FALLBACK_LOCAL: bool = True
 
     class Config:
-        env_file = ".env"
+        env_file = str(ENV_PATH)
         case_sensitive = True
 
     @property

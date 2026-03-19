@@ -1,11 +1,17 @@
 """Punto de entrada del backend FastAPI de AuraFit AI."""
 
-from fastapi import FastAPI
+from datetime import time
+from typing import Any, Dict, List, Optional
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
 from app.config.settings import settings
-from app.db import engine, verify_database_connection, Base
+from app.db import Base, engine, get_db, verify_database_connection
 from app.models import Rol, Usuario, PerfilSalud, RegistroDiario
 from app.api.auth import router as auth_router
+from app.services.auth_service import obtener_usuario_por_token
+from services.gemini_service import consultar_ia
 import logging
 
 # Configuracion basica de logs para desarrollo
@@ -77,6 +83,184 @@ async def shutdown_event():
 # Endpoints de salud
 
 app.include_router(auth_router)
+
+
+class ChatTestRequest(BaseModel):
+    """Payload de prueba para consultar Gemini."""
+
+    mensaje: str = Field(..., min_length=1, description="Mensaje del usuario")
+    historial_chat: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Historial conversacional opcional",
+    )
+
+
+class PerfilCompletarRequest(BaseModel):
+    """Datos antropometricos y de habitos para completar perfil de salud."""
+
+    peso: float = Field(..., gt=0, le=400, description="Peso en kg")
+    altura: int = Field(..., gt=0, le=250, description="Altura en cm")
+    frecuencia_gym: str = Field(..., description="sedentario, 1-3 dias o +4 dias")
+    hora_desayuno: time
+    hora_comida: time
+    hora_cena: time
+    momento_picoteo: str = Field(..., description="manana, tarde o noche")
+    percepcion_corporal: str = Field(..., min_length=1, description="Texto libre del usuario")
+
+    @field_validator("frecuencia_gym")
+    @classmethod
+    def validar_frecuencia_gym(cls, value: str) -> str:
+        """Normaliza y valida la frecuencia de entrenamiento."""
+        frecuencia = value.strip().lower()
+        equivalencias = {
+            "sedentario": "sedentario",
+            "1-3 dias": "1-3 dias",
+            "1-3 días": "1-3 dias",
+            "+4 dias": "+4 dias",
+            "+4 días": "+4 dias",
+            "4+ dias": "+4 dias",
+            "4+ días": "+4 dias",
+        }
+        if frecuencia not in equivalencias:
+            raise ValueError("frecuencia_gym debe ser: sedentario, 1-3 dias o +4 dias")
+        return equivalencias[frecuencia]
+
+    @field_validator("momento_picoteo")
+    @classmethod
+    def validar_momento_picoteo(cls, value: str) -> str:
+        """Normaliza y valida el momento critico de picoteo."""
+        momento = value.strip().lower()
+        equivalencias = {
+            "manana": "manana",
+            "mañana": "manana",
+            "tarde": "tarde",
+            "noche": "noche",
+        }
+        if momento not in equivalencias:
+            raise ValueError("momento_picoteo debe ser: manana, tarde o noche")
+        return equivalencias[momento]
+
+
+class PerfilCompletarResponse(BaseModel):
+    """Respuesta de guardado de perfil antropometrico."""
+
+    usuario_id: int
+    imc_calculado: float
+    mensaje: str
+
+
+def _extraer_token_bearer(authorization: Optional[str]) -> str:
+    """Extrae token desde cabecera Authorization en formato Bearer."""
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token no proporcionado",
+        )
+
+    esquema, _, token = authorization.partition(" ")
+    if esquema.lower() != "bearer" or not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Formato de token invalido. Usa: Bearer <token>",
+        )
+
+    return token
+
+
+def obtener_usuario_actual(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+) -> Usuario:
+    """Resuelve el usuario autenticado a partir del Bearer token."""
+    token = _extraer_token_bearer(authorization)
+    usuario = obtener_usuario_por_token(db, token)
+
+    if not usuario:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+        )
+
+    return usuario
+
+
+@app.post("/chat/test")
+async def chat_test(payload: ChatTestRequest):
+    """Prueba de conexion con Gemini para validar API Key y respuesta de IA."""
+    try:
+        resultado = consultar_ia(
+            mensaje_usuario=payload.mensaje,
+            historial_chat=payload.historial_chat,
+        )
+    except RuntimeError as e:
+        # Normalmente indica API key ausente o configuracion incompleta.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        logger.exception("Error al consultar Gemini en /chat/test")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Error al consultar el servicio de IA",
+        ) from e
+
+    return {
+        "ok": True,
+        "entrada": payload.mensaje,
+        **resultado,
+    }
+
+
+@app.post("/perfil/completar", response_model=PerfilCompletarResponse)
+def completar_perfil(
+    payload: PerfilCompletarRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> PerfilCompletarResponse:
+    """Crea o actualiza el perfil antropometrico del usuario autenticado."""
+    altura_m = payload.altura / 100
+    imc = round(payload.peso / (altura_m * altura_m), 2)
+
+    try:
+        perfil = db.query(PerfilSalud).filter(PerfilSalud.usuario_id == usuario_actual.id).first()
+        perfil_existia = perfil is not None
+
+        if not perfil:
+            perfil = PerfilSalud(usuario_id=usuario_actual.id)
+            db.add(perfil)
+
+        perfil.peso_actual = payload.peso
+        perfil.altura = payload.altura
+        perfil.imc_actual = imc
+        perfil.frecuencia_gym = payload.frecuencia_gym
+        perfil.hora_desayuno = payload.hora_desayuno
+        perfil.hora_comida = payload.hora_comida
+        perfil.hora_cena = payload.hora_cena
+        perfil.momento_critico_picoteo = payload.momento_picoteo
+        perfil.percepcion_corporal = payload.percepcion_corporal.strip()
+
+        db.commit()
+        db.refresh(perfil)
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error guardando perfil antropometrico")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo guardar el perfil de salud",
+        ) from e
+
+    mensaje = (
+        "Perfil antropometrico actualizado correctamente"
+        if perfil_existia
+        else "Perfil antropometrico creado correctamente"
+    )
+
+    return PerfilCompletarResponse(
+        usuario_id=usuario_actual.id,
+        imc_calculado=float(imc),
+        mensaje=mensaje,
+    )
 
 @app.get("/")
 async def root():

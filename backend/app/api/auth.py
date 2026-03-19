@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.auth import LoginRequest, LoginResponse
-from app.services.auth_service import autenticar_usuario
+from app.services.auth_service import autenticar_usuario, generar_token_usuario
 
 
 router = APIRouter(tags=["autenticacion"])
@@ -27,9 +27,13 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse
             detail="El usuario no tiene rol asignado",
         )
 
+    access_token = generar_token_usuario(usuario.id)
+
     return LoginResponse(
         usuario_id=usuario.id,
         nombre=usuario.nombre,
         email=usuario.email,
         rol=usuario.rol.nombre,
+        access_token=access_token,
+        token_type="bearer",
     )
