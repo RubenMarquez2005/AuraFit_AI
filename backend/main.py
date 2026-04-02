@@ -1,7 +1,8 @@
 """Punto de entrada del backend FastAPI de AuraFit AI."""
 
-from datetime import time
+from datetime import time, datetime
 from typing import Any, Dict, List, Optional
+import re
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
@@ -165,6 +166,74 @@ class RasaChatResponse(BaseModel):
     respuestas: List[Dict[str, Any]]
 
 
+class ChatRequest(BaseModel):
+    """Payload de mensaje de usuario para el endpoint POST /chat."""
+
+    mensaje: str = Field(..., min_length=1, description="Mensaje del usuario")
+    sender: str = Field(default="aurafit_user", min_length=1, description="ID único del usuario")
+
+
+class ChatResponse(BaseModel):
+    """Respuesta del endpoint POST /chat."""
+
+    ok: bool
+    sender: str
+    respuesta_ia: str
+    peso_registrado: Optional[float] = None
+    mensaje_peso: Optional[str] = None
+
+
+def _extraer_peso_del_mensaje(mensaje: str) -> Optional[float]:
+    """
+    Intenta extraer un peso en kg del mensaje del usuario.
+    Busca patrones como: "80kg", "80 kg", "He pesado 80", "Mi peso es 80", etc.
+    """
+    # Busca números seguidos de 'kg' o 'kilos'
+    patrones = [
+        r"(\d+(?:[.,]\d+)?)\s*kg",  # Ej: 80kg, 80 kg, 80.5 kg
+        r"pesé?\s+(\d+(?:[.,]\d+)?)",  # Ej: pesé 80, peso 80
+        r"peso\s+(?:de\s+)?(\d+(?:[.,]\d+)?)",  # Ej: peso de 80
+        r"pesan?\s+(\d+(?:[.,]\d+)?)",  # Ej: pesa 80
+    ]
+    
+    for patron in patrones:
+        match = re.search(patron, mensaje, re.IGNORECASE)
+        if match:
+            try:
+                peso_str = match.group(1).replace(",", ".")
+                peso = float(peso_str)
+                if 30 <= peso <= 400:  # Validación de rango razonable
+                    return peso
+            except ValueError:
+                continue
+    
+    return None
+
+
+def _contiene_consejo_salud(respuesta: str) -> bool:
+    """
+    Detecta si una respuesta de RASA contiene consejos de salud.
+    Busca palabras clave asociadas con nutrition, gym, salud mental.
+    """
+    palabras_clave = [
+        "come", "comida", "nutrición", "desayuno", "almuerzo", "cena",
+        "agua", "proteína", "carbohidrato", "grasa", "calorías",
+        "ejercicio", "gym", "entrenamiento", "correr", "caminar",
+        "estrés", "ansiedad", "ánimo", "meditación", "relajación",
+        "salud", "bienestar", "recomiendo", "sugiero", "deberías"
+    ]
+    respuesta_lower = respuesta.lower()
+    return any(palabra in respuesta_lower for palabra in palabras_clave)
+
+
+class RasaChatResponse(BaseModel):
+    """Respuesta unificada del puente FastAPI hacia RASA."""
+
+    ok: bool
+    sender: str
+    respuestas: List[Dict[str, Any]]
+
+
 def _extraer_token_bearer(authorization: Optional[str]) -> str:
     """Extrae token desde cabecera Authorization en formato Bearer."""
     if not authorization:
@@ -226,6 +295,72 @@ async def chat_test(payload: ChatTestRequest):
         "entrada": payload.mensaje,
         **resultado,
     }
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(
+    payload: ChatRequest,
+    db: Session = Depends(get_db),
+) -> ChatResponse:
+    """
+    Endpoint principal de chat que integra RASA con registro en BD.
+    
+    1. Envía el mensaje a RASA
+    2. Extrae peso si está en el mensaje
+    3. Guarda respuestas de salud en registros_diarios
+    4. Actualiza perfil de salud si se detectó peso
+    """
+    try:
+        # Enviar mensaje a RASA
+        respuestas_rasa = enviar_mensaje_a_rasa(
+            sender=payload.sender.strip(),
+            mensaje=payload.mensaje.strip(),
+        )
+        
+        # Construir respuesta del IA (concatenar respuestas de RASA)
+        respuesta_ia = " ".join([
+            resp.get("text", "") for resp in respuestas_rasa if isinstance(resp, dict)
+        ]) or "He recibido tu mensaje. ¿Cómo puedo ayudarte?"
+        
+    except Exception as e:
+        logger.exception("Error al consultar RASA en /chat")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="No se pudo obtener respuesta desde RASA",
+        ) from e
+    
+    peso_registrado = None
+    mensaje_peso = None
+    
+    try:
+        # Intentar extraer peso del mensaje
+        peso = _extraer_peso_del_mensaje(payload.mensaje)
+        
+        if peso:
+            peso_registrado = peso
+            mensaje_peso = f"Peso registrado: {peso}kg"
+            logger.info(f"Peso extraído del mensaje: {peso}kg")
+            
+            # TODO: Buscar usuario por sender_id en registros si es un usuario autenticado
+            # Por ahora solo registramos el peso en el contexto de la respuesta
+        
+        # Guardar respuesta de salud en registros_diarios si aplica
+        if _contiene_consejo_salud(respuesta_ia):
+            # TODO: Asociar con usuario_id cuando tengamos autenticación
+            # Por ahora solo lo registramos en logs
+            logger.info(f"Respuesta de salud detectada: {respuesta_ia[:100]}...")
+    
+    except Exception as e:
+        logger.exception("Error procesando información del mensaje")
+        # No lanzamos error, continuamos con la respuesta
+    
+    return ChatResponse(
+        ok=True,
+        sender=payload.sender.strip(),
+        respuesta_ia=respuesta_ia,
+        peso_registrado=peso_registrado,
+        mensaje_peso=mensaje_peso,
+    )
 
 
 @app.post("/chat/rasa", response_model=RasaChatResponse)

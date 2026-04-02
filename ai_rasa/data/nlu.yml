@@ -1,6 +1,44 @@
 version: "3.1"
 
 nlu:
+- intent: saludar
+  examples: |
+    - Hola
+    - Buenos días
+    - Buenas tardes
+    - Buenas noches
+    - Hola, ¿qué tal?
+    - ¿Cómo estás?
+    - Buenos días, ¿cómo amaneciste?
+    - Saludos
+    - Hey
+    - Hello
+    - Hi
+
+- intent: informar_peso
+  examples: |
+    - He pesado 80kg
+    - Mi peso hoy es 80kg
+    - Pesé 75 kilos
+    - Hoy pese 85kg
+    - Mi peso es 70kg
+    - Registrar peso: 80kg
+    - Acabo de pesar 82kg
+    - Peso actual: 78kg
+
+- intent: estado_animo_mal
+  examples: |
+    - Me siento ansioso
+    - Tengo ganas de un atracón
+    - Odio mi cuerpo
+    - Me siento muy deprimido
+    - Tengo ansiedad
+    - Quiero comer sin control
+    - Estoy ansioso y estresado
+    - Me siento mal conmigo mismo
+    - Tengo un atracón
+    - Estoy muy nervioso
+
 - intent: greet
   examples: |
     - hey

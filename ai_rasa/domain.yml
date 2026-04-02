@@ -1,6 +1,9 @@
 version: "3.1"
 
 intents:
+  - saludar
+  - informar_peso
+  - estado_animo_mal
   - greet
   - goodbye
   - affirm
@@ -10,24 +13,36 @@ intents:
   - bot_challenge
 
 responses:
+  utter_saludar:
+  - text: "¡Hola! Bienvenido a AuraFit AI. Estoy aquí para apoyarte en tu bienestar físico y mental. ¿Cómo puedo ayudarte hoy?"
+  
+  utter_informar_peso:
+  - text: "Excelente, gracias por registrar tu peso. Este dato es importante para monitorear tu progreso. Continuaremos trabajando juntos hacia tus objetivos de salud."
+  - text: "Perfecto, he registrado tu peso. Recuerda que el progreso no solo se mide en números, sino en cómo te sientes día a día."
+  
+  utter_estado_animo_mal:
+  - text: "Entiendo que te sientas así. Es completamente normal experimentar esos sentimientos. Te recomiendo tomar un momento para respirareprofundo. ¿Quieres que hablemos sobre esto?"
+  - text: "Siento que estés pasando por esto. Tu bienestar mental es tan importante como tu salud física. No estás solo en esto. ¿Hay algo específico que te preocupe?"
+  - text: "Aprecio tu honestidad. La ansiedad y el estrés son desafíos reales. Podemos trabajar juntos en estrategias para manejarlos. ¿Quieres explorar técnicas de relajación?"
+
   utter_greet:
-  - text: "Hey! How are you?"
+  - text: "Hey! ¿Cómo estás hoy?"
 
   utter_cheer_up:
   - text: "Here is something to cheer you up:"
     image: "https://i.imgur.com/nGF1K8f.jpg"
 
   utter_did_that_help:
-  - text: "Did that help you?"
+  - text: "¿Te ayudó esto?"
 
   utter_happy:
-  - text: "Great, carry on!"
+  - text: "¡Excelente, sigue adelante!"
 
   utter_goodbye:
-  - text: "Bye"
+  - text: "Que tengas un excelente día. Recuerda cuidarte. ¡Hasta pronto!"
 
   utter_iamabot:
-  - text: "I am a bot, powered by Rasa."
+  - text: "Soy AuraFit AI, tu asistente de salud y bienestar impulsado por inteligencia artificial."
 
 session_config:
   session_expiration_time: 60
