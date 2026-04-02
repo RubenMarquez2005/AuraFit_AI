@@ -181,6 +181,9 @@ class ChatResponse(BaseModel):
     respuesta_ia: str
     peso_registrado: Optional[float] = None
     mensaje_peso: Optional[str] = None
+    imc_calculado: Optional[float] = None
+    imc_rango: Optional[str] = None  # "normal", "sobrepeso", "aviso"
+    solicitar_altura: bool = False  # Si True, se debe pedir altura al usuario
 
 
 def _extraer_peso_del_mensaje(mensaje: str) -> Optional[float]:
@@ -224,6 +227,18 @@ def _contiene_consejo_salud(respuesta: str) -> bool:
     ]
     respuesta_lower = respuesta.lower()
     return any(palabra in respuesta_lower for palabra in palabras_clave)
+
+
+def _calcular_rango_imc(imc: float) -> str:
+    """Determina el rango de IMC: 'normal', 'sobrepeso' o 'aviso'."""
+    if imc < 18.5:
+        return "aviso"  # Bajo peso
+    elif imc < 25:
+        return "normal"  # Peso normal
+    elif imc < 30:
+        return "sobrepeso"  # Sobrepeso
+    else:
+        return "aviso"  # Obesidad
 
 
 class RasaChatResponse(BaseModel):
@@ -303,12 +318,17 @@ def chat(
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     """
-    Endpoint principal de chat que integra RASA con registro en BD.
+    Endpoint principal de chat que integra RASA con persistencia en BD.
     
+    Lógica:
     1. Envía el mensaje a RASA
     2. Extrae peso si está en el mensaje
-    3. Guarda respuestas de salud en registros_diarios
-    4. Actualiza perfil de salud si se detectó peso
+    3. Si hay peso:
+       - Busca el usuario por sender (user_id)
+       - Si existe, busca su perfil_salud
+       - Si tiene altura: calcula IMC y lo guarda
+       - Si NO tiene altura: solicita que la proporcione
+    4. Guarda respuestas de salud en registros_diarios
     """
     try:
         # Enviar mensaje a RASA
@@ -331,6 +351,9 @@ def chat(
     
     peso_registrado = None
     mensaje_peso = None
+    imc_calculado = None
+    imc_rango = None
+    solicitar_altura = False
     
     try:
         # Intentar extraer peso del mensaje
@@ -338,20 +361,76 @@ def chat(
         
         if peso:
             peso_registrado = peso
-            mensaje_peso = f"Peso registrado: {peso}kg"
             logger.info(f"Peso extraído del mensaje: {peso}kg")
             
-            # TODO: Buscar usuario por sender_id en registros si es un usuario autenticado
-            # Por ahora solo registramos el peso en el contexto de la respuesta
+            # Intentar obtener el usuario por sender (debería ser user_id)
+            try:
+                user_id = int(payload.sender.strip())
+                usuario = db.query(Usuario).filter(Usuario.id == user_id).first()
+                
+                if usuario:
+                    # Buscar o crear perfil de salud
+                    perfil = db.query(PerfilSalud).filter(
+                        PerfilSalud.usuario_id == user_id
+                    ).first()
+                    
+                    if not perfil:
+                        # Crear nuevo perfil
+                        perfil = PerfilSalud(usuario_id=user_id, peso_actual=peso)
+                        db.add(perfil)
+                        mensaje_peso = f"Peso registrado: {peso}kg. Ahora necesito tu altura para calcular el IMC."
+                        solicitar_altura = True
+                    else:
+                        # Perfil ya existe
+                        perfil.peso_actual = peso
+                        
+                        if perfil.altura and perfil.altura > 0:
+                            # Calcular IMC
+                            altura_m = perfil.altura / 100
+                            imc = round(peso / (altura_m * altura_m), 2)
+                            perfil.imc_actual = imc
+                            imc_calculado = imc
+                            imc_rango = _calcular_rango_imc(imc)
+                            mensaje_peso = f"Peso registrado: {peso}kg | IMC calculado: {imc} ({imc_rango})"
+                        else:
+                            # No tiene altura registrada
+                            mensaje_peso = f"Peso registrado: {peso}kg. Para calcular tu IMC, ¿cuánto mides en cm?"
+                            solicitar_altura = True
+                    
+                    # Guardar cambios
+                    db.commit()
+                    db.refresh(perfil) if perfil else None
+                    logger.info(f"Perfil de salud actualizado para usuario {user_id}")
+                else:
+                    mensaje_peso = f"Peso registrado: {peso}kg (usuario no encontrado en BD)"
+                    logger.warning(f"Usuario con ID {user_id} no encontrado en BD")
+            
+            except (ValueError, AttributeError):
+                # sender no es un entero válido
+                mensaje_peso = f"Peso registrado: {peso}kg (sin asociación a usuario)"
+                logger.info(f"sender='{payload.sender}' no es un user_id válido")
         
         # Guardar respuesta de salud en registros_diarios si aplica
         if _contiene_consejo_salud(respuesta_ia):
-            # TODO: Asociar con usuario_id cuando tengamos autenticación
-            # Por ahora solo lo registramos en logs
-            logger.info(f"Respuesta de salud detectada: {respuesta_ia[:100]}...")
+            try:
+                user_id = int(payload.sender.strip())
+                usuario = db.query(Usuario).filter(Usuario.id == user_id).first()
+                if usuario:
+                    registro = RegistroDiario(
+                        usuario_id=user_id,
+                        tipo_entrada="consejo_salud",
+                        descripcion=respuesta_ia[:500],  # Guardar primeros 500 chars
+                    )
+                    db.add(registro)
+                    db.commit()
+                    logger.info(f"Registro diario de consejo guardado para usuario {user_id}")
+            except Exception as e:
+                logger.warning(f"No se pudo guardar registro diario: {str(e)}")
+                db.rollback()
     
     except Exception as e:
         logger.exception("Error procesando información del mensaje")
+        db.rollback()
         # No lanzamos error, continuamos con la respuesta
     
     return ChatResponse(
@@ -360,6 +439,9 @@ def chat(
         respuesta_ia=respuesta_ia,
         peso_registrado=peso_registrado,
         mensaje_peso=mensaje_peso,
+        imc_calculado=imc_calculado,
+        imc_rango=imc_rango,
+        solicitar_altura=solicitar_altura,
     )
 
 
