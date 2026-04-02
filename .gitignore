@@ -56,3 +56,8 @@ htmlcov/
 .flutter-plugins-dependencies
 .packages
 build/
+
+# RASA
+ai_rasa/venv_rasa/
+ai_rasa/.rasa/
+ai_rasa/models/

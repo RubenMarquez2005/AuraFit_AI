@@ -12,6 +12,7 @@ from app.models import Rol, Usuario, PerfilSalud, RegistroDiario
 from app.api.auth import router as auth_router
 from app.services.auth_service import obtener_usuario_por_token
 from services.gemini_service import consultar_ia
+from services.rasa_service import enviar_mensaje_a_rasa
 import logging
 
 # Configuracion basica de logs para desarrollo
@@ -149,6 +150,21 @@ class PerfilCompletarResponse(BaseModel):
     mensaje: str
 
 
+class RasaChatRequest(BaseModel):
+    """Payload de mensaje para el webhook REST de RASA."""
+
+    mensaje: str = Field(..., min_length=1, description="Texto del usuario")
+    sender: str = Field(default="aurafit_user", min_length=1)
+
+
+class RasaChatResponse(BaseModel):
+    """Respuesta unificada del puente FastAPI hacia RASA."""
+
+    ok: bool
+    sender: str
+    respuestas: List[Dict[str, Any]]
+
+
 def _extraer_token_bearer(authorization: Optional[str]) -> str:
     """Extrae token desde cabecera Authorization en formato Bearer."""
     if not authorization:
@@ -210,6 +226,28 @@ async def chat_test(payload: ChatTestRequest):
         "entrada": payload.mensaje,
         **resultado,
     }
+
+
+@app.post("/chat/rasa", response_model=RasaChatResponse)
+def chat_rasa(payload: RasaChatRequest) -> RasaChatResponse:
+    """Envia un mensaje a RASA (puerto 5005) y devuelve su respuesta REST."""
+    try:
+        respuestas = enviar_mensaje_a_rasa(
+            sender=payload.sender.strip(),
+            mensaje=payload.mensaje.strip(),
+        )
+    except Exception as e:
+        logger.exception("Error al consultar RASA")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="No se pudo obtener respuesta desde RASA",
+        ) from e
+
+    return RasaChatResponse(
+        ok=True,
+        sender=payload.sender.strip(),
+        respuestas=respuestas,
+    )
 
 
 @app.post("/perfil/completar", response_model=PerfilCompletarResponse)

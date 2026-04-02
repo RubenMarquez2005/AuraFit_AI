@@ -19,6 +19,15 @@ AuraFit_AI/
 │   ├── run.py
 │   ├── requirements.txt
 │   └── .env.example
+├── ai_rasa/                     # Asistente conversacional local (RASA)
+│   ├── actions/
+│   ├── data/
+│   ├── models/
+│   ├── tests/
+│   ├── config.yml
+│   ├── domain.yml
+│   ├── credentials.yml
+│   └── endpoints.yml
 ├── database/                    # Scripts SQL
 └── docs/                        # Memoria y bitacora del proyecto
 ```
@@ -48,9 +57,9 @@ python3 run.py
 ```
 
 ### Endpoints utiles
-- http://localhost:8000/docs
-- http://localhost:8000/health
-- http://localhost:8000/health/db
+- http://localhost:8001/docs
+- http://localhost:8001/health
+- http://localhost:8001/health/db
 
 ### Endpoint de autenticacion
 
@@ -100,6 +109,30 @@ cd frontend
 flutter pub get
 flutter run
 ```
+
+## RASA local (ai_rasa)
+
+1. Crear entorno e instalar RASA:
+```bash
+cd ai_rasa
+python3 -m venv venv_rasa
+./venv_rasa/bin/python -m pip install --upgrade pip
+./venv_rasa/bin/python -m pip install rasa
+```
+
+2. Inicializar proyecto base:
+```bash
+./venv_rasa/bin/rasa init --no-prompt
+```
+
+3. Levantar servidor RASA en puerto 5005:
+```bash
+./venv_rasa/bin/rasa run --enable-api --cors '*' --port 5005
+```
+
+4. Consumir desde backend FastAPI:
+- Endpoint: `POST /chat/rasa`
+- URL por defecto de RASA usada por backend: `http://127.0.0.1:5005/webhooks/rest/webhook`
 
 ## Base de datos
 

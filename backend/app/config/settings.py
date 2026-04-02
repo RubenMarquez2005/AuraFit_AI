@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.0-flash"
     IA_FALLBACK_LOCAL: bool = True
 
+    # Configuracion del servicio RASA
+    RASA_WEBHOOK_URL: str = "http://127.0.0.1:5005/webhooks/rest/webhook"
+    RASA_TIMEOUT_SECONDS: int = 20
+
     class Config:
         env_file = str(ENV_PATH)
         case_sensitive = True
