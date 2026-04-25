@@ -1,4 +1,40 @@
 """Database models module"""
-from app.models.database import Rol, Usuario, PerfilSalud, RegistroDiario
+from app.models.database import (
+	Rol,
+	Usuario,
+	PerfilSalud,
+	RegistroDiario,
+	Derivacion,
+	CitaDisponible,
+	CitaReservada,
+	HabitoAgenda,
+	EvaluacionIA,
+	MensajeChat,
+	MemoriaChat,
+	MedicacionAsignada,
+	PlanNutricionalClinico,
+	ProtocoloHospitalario,
+	ChecklistClinicoPaciente,
+	ChecklistClinicoHistorial,
+	RecursoClinico,
+)
 
-__all__ = ["Rol", "Usuario", "PerfilSalud", "RegistroDiario"]
+__all__ = [
+	"Rol",
+	"Usuario",
+	"PerfilSalud",
+	"RegistroDiario",
+	"Derivacion",
+	"CitaDisponible",
+	"CitaReservada",
+	"HabitoAgenda",
+	"EvaluacionIA",
+	"MensajeChat",
+	"MemoriaChat",
+	"MedicacionAsignada",
+	"PlanNutricionalClinico",
+	"ProtocoloHospitalario",
+	"ChecklistClinicoPaciente",
+	"ChecklistClinicoHistorial",
+	"RecursoClinico",
+]

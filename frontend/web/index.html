@@ -31,8 +31,147 @@
 
   <title>aurafit_frontend</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(91, 141, 238, 0.14), transparent 28%),
+        radial-gradient(circle at 80% 10%, rgba(16, 185, 129, 0.12), transparent 26%),
+        linear-gradient(180deg, #f7fafd 0%, #eef3fb 100%);
+    }
+
+    body {
+      position: relative;
+      color: #0f172a;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    #aurafit-effects {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .aurafit-orb {
+      position: absolute;
+      border-radius: 9999px;
+      filter: blur(18px);
+      opacity: 0.72;
+      mix-blend-mode: screen;
+      animation: aurafit-float 18s ease-in-out infinite;
+    }
+
+    .aurafit-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.25));
+      opacity: 0.45;
+    }
+
+    .aurafit-glow {
+      position: absolute;
+      width: 520px;
+      height: 520px;
+      border-radius: 9999px;
+      background: radial-gradient(circle, rgba(59, 130, 246, 0.18), transparent 62%);
+      transform: translate(-50%, -50%);
+      mix-blend-mode: screen;
+      filter: blur(22px);
+      opacity: 0.8;
+      will-change: transform;
+    }
+
+    @keyframes aurafit-float {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+      25% { transform: translate3d(20px, -30px, 0) scale(1.05); }
+      50% { transform: translate3d(-18px, 22px, 0) scale(0.98); }
+      75% { transform: translate3d(28px, 12px, 0) scale(1.06); }
+    }
+  </style>
 </head>
 <body>
+  <div id="aurafit-effects" aria-hidden="true">
+    <div class="aurafit-grid"></div>
+    <div class="aurafit-glow" id="aurafit-glow"></div>
+  </div>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (var i = 0; i < registrations.length; i++) {
+          registrations[i].unregister();
+        }
+      });
+    }
+
+    (function () {
+      var effects = document.getElementById('aurafit-effects');
+      if (!effects) return;
+
+      var palette = [
+        'rgba(91, 141, 238, 0.35)',
+        'rgba(16, 185, 129, 0.30)',
+        'rgba(139, 92, 246, 0.26)',
+        'rgba(245, 158, 11, 0.22)'
+      ];
+
+      function addOrb(size, left, top, duration, delay, color) {
+        var orb = document.createElement('div');
+        orb.className = 'aurafit-orb';
+        orb.style.width = size + 'px';
+        orb.style.height = size + 'px';
+        orb.style.left = left;
+        orb.style.top = top;
+        orb.style.background = 'radial-gradient(circle, ' + color + ', transparent 70%)';
+        orb.style.animationDuration = duration + 's';
+        orb.style.animationDelay = delay + 's';
+        effects.appendChild(orb);
+      }
+
+      addOrb(360, '8%', '18%', 20, -4, palette[0]);
+      addOrb(260, '82%', '12%', 24, -10, palette[1]);
+      addOrb(300, '76%', '70%', 22, -6, palette[2]);
+      addOrb(200, '18%', '72%', 26, -12, palette[3]);
+
+      var glow = document.getElementById('aurafit-glow');
+      var targetX = window.innerWidth * 0.5;
+      var targetY = window.innerHeight * 0.22;
+      var currentX = targetX;
+      var currentY = targetY;
+
+      window.addEventListener('pointermove', function (event) {
+        targetX = event.clientX;
+        targetY = event.clientY;
+      }, { passive: true });
+
+      window.addEventListener('resize', function () {
+        if (!targetX || !targetY) {
+          targetX = window.innerWidth * 0.5;
+          targetY = window.innerHeight * 0.22;
+        }
+      });
+
+      function animateGlow() {
+        currentX += (targetX - currentX) * 0.08;
+        currentY += (targetY - currentY) * 0.08;
+        if (glow) {
+          glow.style.left = currentX + 'px';
+          glow.style.top = currentY + 'px';
+        }
+        requestAnimationFrame(animateGlow);
+      }
+
+      requestAnimationFrame(animateGlow);
+    })();
+  </script>
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader

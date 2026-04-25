@@ -1,6 +1,8 @@
 #!/bin/bash
 # Script para ejecutar AuraFit AI RASA
 
+set -e
+
 echo "🤖 AuraFit AI - RASA (NLU & IA)"
 echo "================================="
 echo ""
@@ -18,16 +20,19 @@ else
 fi
 
 # Entrenar modelo si no existe
-if [ ! -f "models/nlu-*/nlu.pkl" ]; then
+if ! ls models/*.tar.gz >/dev/null 2>&1; then
     echo "📚 Entrenando modelo RASA (primera vez)..."
-    rasa train
+    /Users/rubenperez/Documents/AuraFit_AI/ai_rasa/venv_rasa/bin/python -m rasa train --data data --domain domain.yml --config config.yml --out models --force
 fi
+
+LATEST_MODEL="$(ls -t models/*.tar.gz | head -1)"
 
 # Ejecutar RASA core + API
 echo ""
 echo "🚀 RASA corriendo en http://127.0.0.1:5005"
 echo "🔌 API Webhook disponible en /webhooks/rest/webhook"
+echo "🧠 Modelo cargado: $LATEST_MODEL"
 echo ""
 
-/Users/rubenperez/Documents/AuraFit_AI/ai_rasa/venv_rasa/bin/python -m rasa run --enable-api --cors "*" -p 5005
+/Users/rubenperez/Documents/AuraFit_AI/ai_rasa/venv_rasa/bin/python -m rasa run --model "$LATEST_MODEL" --enable-api --cors "*" -p 5005
 

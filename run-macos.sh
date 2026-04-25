@@ -15,10 +15,6 @@ if ! command -v flutter &> /dev/null; then
     exit 1
 fi
 
-# Limpiar caché anterior
-echo "🧹 Limpiando caché..."
-flutter clean
-
 # Obtener dependencias
 echo "📦 Descargando dependencias..."
 flutter pub get

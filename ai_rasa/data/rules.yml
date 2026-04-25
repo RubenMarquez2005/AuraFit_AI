@@ -2,12 +2,72 @@ version: "3.1"
 
 rules:
 
-- rule: Say goodbye anytime the user says goodbye
+- rule: Responder despedida
   steps:
-  - intent: goodbye
-  - action: utter_goodbye
+  - intent: despedir
+  - action: utter_despedir
 
-- rule: Say 'I am a bot' anytime the user challenges
+- rule: Responder ayuda general
   steps:
-  - intent: bot_challenge
-  - action: utter_iamabot
+  - intent: ayuda_general
+  - action: utter_ayuda_general
+
+- rule: Responder agradecimiento
+  steps:
+  - intent: agradecimiento
+  - action: utter_agradecimiento
+
+- rule: Responder falta de apetito
+  steps:
+  - intent: falta_apetito
+  - action: utter_falta_apetito
+
+- rule: Responder fallback de NLU
+  steps:
+  - intent: nlu_fallback
+  - action: utter_default
+
+- rule: Responder nutrición profesional
+  steps:
+  - intent: profesional_nutricion_adherencia
+  - action: utter_profesional_nutricion_adherencia
+
+- rule: Responder psicología profesional
+  steps:
+  - intent: profesional_psicologia_riesgo
+  - action: utter_profesional_psicologia_riesgo
+
+- rule: Responder coach profesional
+  steps:
+  - intent: profesional_coach_adherencia
+  - action: utter_profesional_coach_adherencia
+
+- rule: Responder médico profesional
+  steps:
+  - intent: profesional_medico_farmacoterapia
+  - action: utter_profesional_medico_farmacoterapia
+
+- rule: Responder recursos de trastornos
+  steps:
+  - intent: profesional_recursos_trastornos
+  - action: utter_profesional_recursos_trastornos
+
+- rule: Responder calorías objetivo profesional
+  steps:
+  - intent: profesional_calorias_objetivo
+  - action: utter_profesional_calorias_objetivo
+
+- rule: Responder ajuste de macros profesional
+  steps:
+  - intent: profesional_ajuste_macros
+  - action: utter_profesional_ajuste_macros
+
+- rule: Responder coordinación gym-calorías
+  steps:
+  - intent: profesional_gym_calorias
+  - action: utter_profesional_gym_calorias
+
+- rule: Responder dieta prescrita
+  steps:
+  - intent: profesional_dieta_prescrita
+  - action: utter_profesional_dieta_prescrita

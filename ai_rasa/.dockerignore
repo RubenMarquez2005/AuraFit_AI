@@ -1,0 +1,7 @@
+venv_rasa/
+.rasa/cache/
+.git/
+.gitignore
+__pycache__/
+*.pyc
+.env

@@ -49,6 +49,12 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 *.log
+.logs/
+.pids/
+backend/venv/
+datasets/*.jsonl
+datasets/**/*.jsonl
+datasets/health_fitness_wellness_25000/
 
 # Flutter
 .dart_tool/

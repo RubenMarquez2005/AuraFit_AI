@@ -2,47 +2,197 @@ version: "3.1"
 
 intents:
   - saludar
+  - despedir
   - informar_peso
-  - estado_animo_mal
-  - greet
-  - goodbye
-  - affirm
-  - deny
-  - mood_great
-  - mood_unhappy
-  - bot_challenge
+  - informar_altura
+  - calular_imc
+  - estado_animo_malo
+  - estado_animo_bueno
+  - pedir_motivacion
+  - pedir_plan_nutricion
+  - preguntar_alimentos
+  - registrar_comida
+  - pedir_plan_ejercicio
+  - preguntar_tecnica_ejercicio
+  - registrar_ejercicio
+  - pedir_meditacion
+  - hablar_sueno
+  - pedir_consejo_general
+  - afirmar
+  - negar
+  - buscar_profesional
+  - solicitar_cita
+  - informacion_app
+  - ayuda_general
+  - charla_casual
+  - agradecimiento
+  - problema_nutricional
+  - falta_apetito
+  - objetivo_subir_peso
+  - objetivo_bajar_peso
+  - pedir_entrenador_personal
+  - plan_nutricion_entrenamiento
+  - profesional_nutricion_adherencia
+  - profesional_psicologia_riesgo
+  - profesional_coach_adherencia
+  - profesional_medico_farmacoterapia
+  - profesional_medicacion_consulta
+  - profesional_interaccion_farmacos
+  - profesional_recursos_trastornos
+  - profesional_escalado_clinico
+  - profesional_coordinacion_caso
+  - profesional_plan_multidisciplinar
+  - profesional_calorias_objetivo
+  - profesional_ajuste_macros
+  - profesional_gym_calorias
+  - profesional_dieta_prescrita
+  - nlu_fallback
+
+entities:
+  - PESO
+  - ALTURA
+  - ALIMENTO
+  - SENTIMIENTO
+  - EJERCICIO
 
 responses:
   utter_saludar:
-  - text: "¡Hola! Bienvenido a AuraFit AI. Estoy aquí para apoyarte en tu bienestar físico y mental. ¿Cómo puedo ayudarte hoy?"
-  
+  - text: "Hola. Soy AuraFit AI, tu asistente de salud integral. Puedo ayudarte con nutricion, ejercicio, salud mental, IMC y seguimiento de progreso."
+
+  utter_despedir:
+  - text: "Hasta pronto. Si quieres, en la proxima sesion continuamos con tu plan nutricional y de entrenamiento."
+
   utter_informar_peso:
-  - text: "Excelente, gracias por registrar tu peso. Este dato es importante para monitorear tu progreso. Continuaremos trabajando juntos hacia tus objetivos de salud."
-  - text: "Perfecto, he registrado tu peso. Recuerda que el progreso no solo se mide en números, sino en cómo te sientes día a día."
-  
-  utter_estado_animo_mal:
-  - text: "Entiendo que te sientas así. Es completamente normal experimentar esos sentimientos. Te recomiendo tomar un momento para respirareprofundo. ¿Quieres que hablemos sobre esto?"
-  - text: "Siento que estés pasando por esto. Tu bienestar mental es tan importante como tu salud física. No estás solo en esto. ¿Hay algo específico que te preocupe?"
-  - text: "Aprecio tu honestidad. La ansiedad y el estrés son desafíos reales. Podemos trabajar juntos en estrategias para manejarlos. ¿Quieres explorar técnicas de relajación?"
+  - text: "Perfecto, peso registrado. Este dato sirve para calcular IMC y ajustar tu plan de nutricion y entrenamiento."
 
-  utter_greet:
-  - text: "Hey! ¿Cómo estás hoy?"
+  utter_informar_altura:
+  - text: "Altura registrada. Con peso y altura puedo ayudarte a interpretar mejor tu estado actual."
 
-  utter_cheer_up:
-  - text: "Here is something to cheer you up:"
-    image: "https://i.imgur.com/nGF1K8f.jpg"
+  utter_calular_imc:
+  - text: "Para calcular IMC necesito tu peso actual y tu altura. Si quieres, te explico tambien como interpretar el resultado por rangos."
 
-  utter_did_that_help:
-  - text: "¿Te ayudó esto?"
+  utter_estado_animo_malo:
+  - text: "Gracias por contarlo. Hoy priorizamos regulacion y no perfeccion: 1) respiracion 4-4-6 por 3 minutos, 2) comida simple y suficiente, 3) movimiento suave 10-20 minutos, 4) objetivo minimo del dia. Si hay malestar intenso sostenido o ideas de dano, busca ayuda profesional inmediata."
 
-  utter_happy:
-  - text: "¡Excelente, sigue adelante!"
+  utter_estado_animo_bueno:
+  - text: "Excelente. Aprovechemos este estado para consolidar habitos: buena nutricion, entrenamiento progresivo y descanso adecuado."
 
-  utter_goodbye:
-  - text: "Que tengas un excelente día. Recuerda cuidarte. ¡Hasta pronto!"
+  utter_pedir_motivacion:
+  - text: "No necesitas perfeccion, necesitas consistencia. Un paso pequeno hoy vale mas que esperar el momento ideal."
 
-  utter_iamabot:
-  - text: "Soy AuraFit AI, tu asistente de salud y bienestar impulsado por inteligencia artificial."
+  utter_pedir_plan_nutricion:
+  - text: "Perfecto. Te dejo una base util desde hoy: 1) 3-4 comidas con proteina en cada una, 2) verduras en 2 comidas, 3) carbohidrato alrededor del entrenamiento, 4) 2L de agua minima. Si quieres te lo convierto en menu diario exacto (desayuno/comida/cena) segun tu objetivo."
+
+  utter_problema_nutricional:
+  - text: "Entendido. Vamos a algo practico: hoy prioriza 3 comidas simples (proteina + carbohidrato + fruta/verdura), evita saltarte comidas y registra hambre/ansiedad 1-10 antes de comer. Si hay atracones repetidos, perdida de peso no intencional o ansiedad alta persistente, coordina con nutricionista y psicologia cuanto antes."
+
+  utter_falta_apetito:
+  - text: "Si hay falta de apetito, usa estrategia de minimo viable: 4 tomas pequenas (cada 3-4h), opciones densas y faciles (yogur + avena, tostada con huevo, batido con fruta/leche), y horarios fijos aunque no haya hambre. Si dura varios dias o hay perdida de peso, toca valoracion profesional."
+
+  utter_objetivo_subir_peso:
+  - text: "Para subir peso de forma saludable: superavit calorico controlado, proteina suficiente, entrenamiento de fuerza y seguimiento semanal."
+
+  utter_objetivo_bajar_peso:
+  - text: "Para bajar peso de forma sostenible: deficit moderado, proteina alta, fuerza para mantener musculo, pasos diarios y control del descanso."
+
+  utter_plan_nutricion_entrenamiento:
+  - text: "Plan integrado base: nutricion (3-4 comidas + proteina por toma), entrenamiento (3 sesiones fuerza + 2 cardio suave), recuperacion (7-9h de sueno), y control semanal (peso, energia, adherencia, estres). Si quieres te lo bajo a calendario diario con horarios reales."
+
+  utter_preguntar_alimentos:
+  - text: "Ningun alimento es bueno o malo por si solo. Importan porcion, frecuencia, contexto y objetivo personal."
+
+  utter_registrar_comida:
+  - text: "Comida registrada. Esto ayuda a detectar patrones y tomar decisiones objetivas con nutricionista y entrenador."
+
+  utter_pedir_plan_ejercicio:
+  - text: "Rutina base segura: 3 dias de fuerza full-body (sentadilla, empuje, tiron, bisagra, core) + 2 dias de caminata/cardio suave 20-30 min. Progresion: subir 1-2 repeticiones o poco peso cada semana manteniendo tecnica limpia."
+
+  utter_preguntar_tecnica_ejercicio:
+  - text: "Buena pregunta. La tecnica correcta reduce lesiones y mejora resultados. Si quieres, te doy una guia paso a paso del ejercicio que menciones."
+
+  utter_registrar_ejercicio:
+  - text: "Entrenamiento registrado. Mantener este historial permite ajustar carga, volumen y recuperacion de forma profesional."
+
+  utter_pedir_entrenador_personal:
+  - text: "Perfecto. Un entrenador personal puede ajustar tecnica, progresion y plan semanal. Si quieres, te preparo un perfil para derivacion profesional."
+
+  utter_pedir_meditacion:
+  - text: "Haz una pausa de 2 minutos: inhala 4 segundos, mantien 4, exhala 4. Repite 6 ciclos y evalua como te sientes despues."
+
+  utter_hablar_sueno:
+  - text: "Dormir bien impacta directamente en hambre, energia y rendimiento. Prioriza 7-9 horas y una rutina regular de descanso."
+
+  utter_pedir_consejo_general:
+  - text: "Te ayudo encantado. Dime si tu prioridad es nutricion, entrenamiento, composicion corporal o gestion emocional."
+
+  utter_afirmar:
+  - text: "Perfecto, seguimos."
+
+  utter_negar:
+  - text: "De acuerdo, lo ajustamos."
+
+  utter_buscar_profesional:
+  - text: "Puedo orientarte para derivacion a nutricionista, psicologo o entrenador personal, segun tu caso."
+
+  utter_solicitar_cita:
+  - text: "Para agendar cita, necesito tipo de profesional y franja horaria preferida."
+
+  utter_informacion_app:
+  - text: "AuraFit integra seguimiento de peso/IMC, nutricion, entrenamiento, estado emocional y apoyo profesional en un solo flujo."
+
+  utter_ayuda_general:
+  - text: "Puedes preguntarme sobre problemas nutricionales, objetivos de subir o bajar peso, plan con gym, tecnica de ejercicios y apoyo profesional."
+
+  utter_charla_casual:
+  - text: "Estoy aqui para ayudarte. Si quieres, empezamos por definir tu objetivo principal de este mes."
+
+  utter_agradecimiento:
+  - text: "Gracias a ti por la confianza."
+
+  utter_profesional_nutricion_adherencia:
+  - text: "Para nutrición clínica, revisa adherencia en 7 días, ingesta proteica, regularidad de comidas y señales de riesgo (pérdida de peso no intencionada o atracones). Ajusta objetivo y deriva si hay criterios psicológicos o médicos."
+
+  utter_profesional_psicologia_riesgo:
+  - text: "En psicología clínica prioriza riesgo emocional: malestar sostenido, ideación autolesiva, aislamiento y disfunción diaria. Si hay señales de alto riesgo, activa escalado inmediato y coordinación médica."
+
+  utter_profesional_coach_adherencia:
+  - text: "Para coaching terapéutico, evalúa adherencia real: sesiones cumplidas, barreras reportadas, recuperación y progresión segura. Reduce carga si hay fatiga elevada y coordina con nutrición/psicología cuando corresponda."
+
+  utter_profesional_medico_farmacoterapia:
+  - text: "En medicina, revisa indicación, dosis, frecuencia, efectos adversos, interacciones y adherencia farmacológica. Documenta cambios y coordina el plan interdisciplinar con nutrición, psicología y entrenamiento."
+
+  utter_profesional_medicacion_consulta:
+  - text: "No sustituyo guía médica oficial. Para decidir medicación usa protocolo clínico, contraindicaciones, comorbilidades y revisión farmacológica actualizada. Si quieres, te estructuro checklist de prescripción segura."
+
+  utter_profesional_interaccion_farmacos:
+  - text: "Para interacciones farmacológicas: valida CYP, QT, sedación, hepatotoxicidad y duplicidades terapéuticas. Verifica además suplementos y consumo de alcohol. Ante duda, prioriza consulta farmacológica especializada."
+
+  utter_profesional_recursos_trastornos:
+  - text: "Recursos clínicos sugeridos: TCA (cribado SCOFF, psicoeducación y derivación especializada), depresión/ansiedad (PHQ-9, GAD-7), y guías de intervención escalonada. Prioriza materiales con evidencia y seguimiento supervisado."
+
+  utter_profesional_escalado_clinico:
+  - text: "Criterios de escalado: riesgo suicida, deterioro funcional severo, pérdida de peso acelerada, efectos adversos graves o descompensación aguda. Activa ruta urgente y registro clínico completo."
+
+  utter_profesional_coordinacion_caso:
+  - text: "Coordinación de caso recomendada: objetivo común semanal, responsables por especialidad, criterios de éxito y fecha de reevaluación. Mantén trazabilidad de decisiones y estado de derivaciones."
+
+  utter_profesional_plan_multidisciplinar:
+  - text: "Plan multidisciplinar base: nutrición (adherencia y educación), psicología (regulación emocional), coaching (actividad progresiva), medicina (seguridad clínica y farmacoterapia). Revisa resultados cada 7 días."
+
+  utter_profesional_calorias_objetivo:
+  - text: "Para objetivo calórico clínico: estima gasto total, define fase (déficit/mantenimiento/superávit), ajusta 5-15% según adherencia y evolución semanal. Evita cambios bruscos si hay riesgo emocional o fatiga alta."
+
+  utter_profesional_ajuste_macros:
+  - text: "Ajuste de macros recomendado: proteína prioritaria, carbohidrato según carga de entrenamiento y grasa suficiente para estabilidad hormonal. Recalibra cada 7 días con respuesta clínica y adherencia real."
+
+  utter_profesional_gym_calorias:
+  - text: "Coordinación gym-calorías: el coach debe respetar la prescripción del nutricionista y ajustar volumen/intensidad en función de energía percibida, recuperación y cumplimiento calórico."
+
+  utter_profesional_dieta_prescrita:
+  - text: "Si existe dieta prescrita por nutrición, mantenla como referencia principal. El resto de especialistas no debe cambiar macros ni calorías, solo registrar observaciones y derivar ajustes al nutricionista o médico."
+
+  utter_default:
+  - text: "Disculpa, no entendí bien. Pregúntame sobre salud, nutrición, ejercicio o emociones."
 
 session_config:
   session_expiration_time: 60

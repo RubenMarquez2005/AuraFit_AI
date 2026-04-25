@@ -1,6 +1,7 @@
 version: "3.1"
 
 nlu:
+# =============== SALUDOS Y DESPEDIDAS ===============
 - intent: saludar
   examples: |
     - Hola
@@ -14,7 +15,28 @@ nlu:
     - Hey
     - Hello
     - Hi
+    - Qué tal
+    - ¿Qué pasa?
+    - Hola amigo
+    - Buenos
+    - Buenas
 
+- intent: despedir
+  examples: |
+    - Adiós
+    - Hasta luego
+    - Bye
+    - Goodbye
+    - Nos vemos
+    - Chao
+    - Hasta pronto
+    - Que estés bien
+    - Me tengo que ir
+    - Tengo prisa
+    - Hasta más tarde
+    - Cuidate
+
+# =============== REGISTRO DE MÉTRICAS DE SALUD ===============
 - intent: informar_peso
   examples: |
     - He pesado 80kg
@@ -25,8 +47,41 @@ nlu:
     - Registrar peso: 80kg
     - Acabo de pesar 82kg
     - Peso actual: 78kg
+    - Registré 76 kilos
+    - Medí este mañana: 82kg
+    - Bueno, peso 90kg
+    - Mi peso es 68 kilos
+    - Tengo 73.5kg
+    - Acabo de subir a la báscula: 84kg
+    - Hace poco pesé 79kg
+    - El peso que marqué la báscula es 81kg
 
-- intent: estado_animo_mal
+- intent: informar_altura
+  examples: |
+    - Mido 1.80m
+    - Tengo 180cm
+    - Mi altura es 5'10"
+    - Mido 175 centímetros
+    - Tengo una altura de 1.68m
+    - Mido 1.90
+    - Tengo 165cm
+    - Soy de 1.55m
+    - Mi estatura es 1.72
+    - Alto 178cm
+
+- intent: calular_imc
+  examples: |
+    - Calcula mi IMC
+    - ¿Cuál es mi índice de masa corporal?
+    - ¿Cuánto es mi IMC?
+    - Quiero saber mi IMC
+    - Ayuda con el cálculo del IMC
+    - ¿Qué IMC tengo?
+    - Comprobar IMC
+    - Dame el IMC
+
+# =============== ESTADO EMOCIONAL Y SALUD MENTAL ===============
+- intent: estado_animo_malo
   examples: |
     - Me siento ansioso
     - Tengo ganas de un atracón
@@ -38,92 +93,539 @@ nlu:
     - Me siento mal conmigo mismo
     - Tengo un atracón
     - Estoy muy nervioso
+    - Me siento horrible
+    - No aguanto más
+    - Esto es muy difícil
+    - Quiero rendirme
+    - Tengo baja autoestima
+    - No me veo bien
 
-- intent: greet
+- intent: estado_animo_bueno
   examples: |
-    - hey
-    - hello
-    - hi
-    - hello there
-    - good morning
-    - good evening
-    - moin
-    - hey there
-    - let's go
-    - hey dude
-    - goodmorning
-    - goodevening
-    - good afternoon
+    - Estoy muy bien
+    - Me siento genial
+    - Hoy es un excelente día
+    - Estoy feliz y motivado
+    - Me siento fuerte
+    - Estoy en forma
+    - Súper energía
+    - Increíble el día
+    - Estoy de buen humor
+    - Me siento positivo
+    - Estoy tan motivado
 
-- intent: goodbye
+- intent: pedir_motivacion
   examples: |
-    - cu
-    - good by
-    - cee you later
-    - good night
-    - bye
-    - goodbye
-    - have a nice day
-    - see you around
-    - bye bye
-    - see you later
+    - Necesito motivación
+    - Dame ánimo
+    - Quiero motivarme
+    - Dime algo motivador
+    - Estoy desmotivado
+    - Necesito inspiración
+    - Ayuda... no tengo ánimo
+    - Dale, motívame
+    - ¿Tienes algo de motivación?
+    - Siento que pierdo la esperanza
 
-- intent: affirm
+# =============== NUTRICIÓN ===============
+- intent: pedir_plan_nutricion
   examples: |
-    - yes
-    - y
-    - indeed
-    - of course
-    - that sounds good
-    - correct
+    - Quiero un plan de dieta
+    - ¿Qué debo comer?
+    - Dame un plan de nutrición
+    - Necesito recomendaciones de comida
+    - ¿Cuál es mi dieta ideal?
+    - Plan de alimentación saludable
+    - Necesito comer mejor
+    - ¿Qué alimentos debo priorizar?
+    - Cómo empiezo a comer sano
+    - Nutrición personalizada
+    - y que como
+    - comidas me refiero
+    - no se que comer hoy
+    - que puedo cenar hoy
+    - que desayuno si quiero bajar grasa
+    - dame un menu semanal
+    - ponme comidas concretas para subir masa
+    - necesito ideas de comida rapida y sana
 
-- intent: deny
+- intent: preguntar_alimentos
   examples: |
-    - no
-    - n
-    - never
-    - I don't think so
-    - don't like that
-    - no way
-    - not really
+    - ¿Es saludable la pizza?
+    - ¿Puedo comer chocolate?
+    - ¿Es bueno el pan blanco?
+    - ¿Debo evitar la pasta?
+    - ¿Son sanos los frutos secos?
+    - ¿Cuáles son buenos carbohidratos?
+    - ¿Es recomendable la leche?
+    - ¿Qué proteínas son mejores?
+    - ¿Es saludable el arroz?
+    - ¿Puedo tomar café?
 
-- intent: mood_great
+- intent: registrar_comida
   examples: |
-    - perfect
-    - great
-    - amazing
-    - feeling like a king
-    - wonderful
-    - I am feeling very good
-    - I am great
-    - I am amazing
-    - I am going to save the world
-    - super stoked
-    - extremely good
-    - so so perfect
-    - so good
-    - so perfect
+    - Desayuné huevo y pan tostado
+    - Almorcé pollo con arroz
+    - Comí una manzana
+    - Registrar: cena de salmón
+    - Hoy tomé café con leche
+    - Para el lunch tuve ensalada
+    - Bebí 2 litros de agua
+    - Mid morning tomé un batido
+    - Pic-nic con fruta y queso
+    - Registrar comida del día
 
-- intent: mood_unhappy
+# =============== EJERCICIO Y GYM ===============
+- intent: pedir_plan_ejercicio
   examples: |
-    - my day was horrible
-    - I am sad
-    - I don't feel very well
-    - I am disappointed
-    - super sad
-    - I'm so sad
-    - sad
-    - very sad
-    - unhappy
-    - not good
-    - not very good
-    - extremly sad
-    - so saad
-    - so sad
+    - Necesito una rutina de ejercicio
+    - ¿Qué ejercicios hago?
+    - Dame un plan de gym
+    - Quiero ponerme en forma
+    - ¿Cuál es la mejor rutina para mi?
+    - Necesito entrenar
+    - ¿Por dónde empiezo en el gym?
+    - Plan de ejercicios para casa
+    - Cardio o pesas
+    - Rutina para principiante
 
-- intent: bot_challenge
+- intent: preguntar_tecnica_ejercicio
   examples: |
-    - are you a bot?
-    - are you a human?
-    - am I talking to a bot?
-    - am I talking to a human?
+    - ¿Cómo se hace una sentadilla correcta?
+    - ¿Cuál es la técnica del press de banca?
+    - ¿Cómo evito lesiones?
+    - ¿Qué músculos trabaja esto?
+    - ¿Cuántas repeticiones hago?
+    - ¿Cuánto descanso entre series?
+    - ¿Es mejor cardio o pesas?
+    - ¿Cuántas veces a la semana debo entrenar?
+    - ¿Qué calentamiento hago?
+
+- intent: registrar_ejercicio
+  examples: |
+    - Hice 30 minutos de cardio
+    - Entrené 1 hora en el gym
+    - Corrí 5km hoy
+    - Hice 3 series de 10 flexiones
+    - Completé mi rutina de brazos
+    - Salí a correr esta mañana
+    - Nado 40 largos en la piscina
+    - Entreno de piernas completado
+    - Hice yoga 20 minutos
+    - Registrar sesión de entrenamiento
+
+# =============== SALUD MENTAL Y BIENESTAR ===============
+- intent: pedir_meditacion
+  examples: |
+    - Necesito relajarme
+    - Enseñame una meditación
+    - Quiero meditar
+    - ¿Cómo hago mindfulness?
+    - Tengo estrés, ayuda
+    - Quiero técnicas de relación
+    - ¿Cómo respiro profundo?
+    - Necesito calmarme
+    - Estoy muy tenso
+    - Técnicas de manejo del estrés
+
+- intent: hablar_sueno
+  examples: |
+    - No duermo bien
+    - Tengo insomnio
+    - Me cuesta dormir
+    - ¿Cómo duermo mejor?
+    - Despierto a mitad de la noche
+    - No puedo conciliar el sueño
+    - Duermo muy poco
+    - ¿Cuántas horas debo dormir?
+    - Mi sueño es pésimo
+    - Tengo pesadillas
+
+- intent: pedir_consejo_general
+  examples: |
+    - ¿Qué me aconsejas?
+    - ¿Qué debería hacer?
+    - Pide ayuda
+    - ¿Cómo sigo adelante?
+    - ¿Qué cambios hago?
+    - ¿Cuál es el primer paso?
+    - Necesito dirección
+    - ¿Cómo empiezo?
+    - Dame un consejo
+
+# =============== AFIRMACIÓN/NEGACIÓN ===============
+- intent: afirmar
+  examples: |
+    - Sí
+    - Claro
+    - Correcto
+    - De acuerdo
+    - Por supuesto
+    - Sí, por favor
+    - Vale
+    - Exacto
+    - Muy bien
+    - Adelante
+
+- intent: negar
+  examples: |
+    - No
+    - De ninguna forma
+    - Nunca
+    - No quiero
+    - Negativo
+    - De ningún modo
+    - Ni hablar
+    - Absolutamente no
+    - Imposible
+    - No, gracias
+
+# =============== BÚSQUEDA DE PROFESIONALES ===============
+- intent: buscar_profesional
+  examples: |
+    - Necesito un nutricionista
+    - Quiero hablar con un psicólogo
+    - ¿Hay doctores disponibles?
+    - Necesito asesoría profesional
+    - Conectarme con un especialista
+    - ¿Hay entrenadores personales?
+    - Busco orientación médica
+    - Quiero una cita con un especialista
+    - ¿Recomendaciones de doctores?
+
+- intent: solicitar_cita
+  examples: |
+    - Quiero agendar una cita
+    - ¿Cuándo puedo ir al doctor?
+    - Necesito programar una consulta
+    - ¿Qué horarios están disponibles?
+    - Agendar cita con nutricionista
+    - ¿A qué hora puedo venir?
+    - Reservar hora con psicólogo
+    - Quiero una cita urgente
+
+# =============== INFORMACIÓN GENERAL ===============
+- intent: informacion_app
+  examples: |
+    - ¿Qué es AuraFit?
+    - ¿Cómo funciona esta aplicación?
+    - ¿Qué puedo hacer aquí?
+    - Cuéntame del app
+    - ¿Para qué sirve AuraFit?
+    - Funcionalidades disponibles
+    - ¿Qué servicios ofreces?
+    - Guía de uso
+
+- intent: ayuda_general
+  examples: |
+    - Ayuda
+    - ¿Qué puedo preguntarte?
+    - No entiendo
+    - ¿Cómo te uso?
+    - Necesito ayuda
+    - ¿Cuáles son mis opciones?
+    - ¿Qué comandos tengo?
+
+# =============== PEQUEÑA CHARLA ===============
+- intent: charla_casual
+  examples: |
+    - ¿Qué tal tu día?
+    - Cuéntame de ti
+    - ¿De dónde eres?
+    - ¿Qué te gusta?
+    - Hablemos un poco
+    - ¿Tienes hobbies?
+    - ¿Qué hiciste hoy?
+
+- intent: agradecimiento
+  examples: |
+    - Gracias
+    - Muchas gracias
+    - Gracias por la ayuda
+    - Te agradezco
+    - Muy amable
+    - Gracias hermano
+    - Aprecio tu ayuda
+    - Vaya gratuidad
+    - Excelente, gracias
+
+# =============== NUTRICION CLINICA Y OBJETIVOS ===============
+- intent: problema_nutricional
+  examples: |
+    - Tengo problemas de nutricion
+    - Mi nutricionista dice que estoy comiendo poco
+    - Tengo deficit nutricional
+    - Me cuesta llegar a mis calorias
+    - Como muy mal entre semana
+    - Tengo atracones por la noche
+    - No tengo apetito y bajo demasiado peso
+    - Tengo hambre todo el dia y no me controlo
+    - Mi dieta no esta funcionando
+    - Mi relacion con la comida es mala
+    - Se me ha quitado el apetito
+    - No me apetece comer nada
+    - Llevo dias comiendo muy poco
+    - Estoy perdiendo peso sin querer
+    - Me cuesta comer aunque se que debo hacerlo
+    - Me siento lleno enseguida y no termino las comidas
+    - como fatal entre semana y luego me da ansiedad
+    - tengo hambre emocional por la noche
+    - estoy con ansiedad y picoteo todo el dia
+    - no se comer bien y entreno fuerte
+    - no mantengo la dieta porque me agobio
+    - no tengo estructura de comidas y acabo atracando
+
+- intent: falta_apetito
+  examples: |
+    - No tengo hambre
+    - Tengo falta de apetito
+    - No me entra comida
+    - Se me quito el apetito
+    - Llevo varios dias sin apetito
+    - Me da asco la comida
+    - Me siento lleno muy rapido
+    - Estoy comiendo mucho menos de lo normal
+    - No puedo acabar un plato
+    - No tengo ganas de comer
+    - Casi no me da hambre
+    - No me apetece desayunar ni comer
+
+- intent: objetivo_subir_peso
+  examples: |
+    - Quiero subir de peso
+    - Necesito ganar masa muscular
+    - El nutricionista me dijo que coma mas
+    - Quiero aumentar calorias
+    - Necesito un plan para volumen
+    - Quiero pasar de 60 a 68 kilos
+    - Estoy muy delgado y quiero mejorar
+    - Quiero ganar peso sin engordar mal
+
+- intent: objetivo_bajar_peso
+  examples: |
+    - Quiero bajar de peso
+    - Necesito perder grasa
+    - Quiero reducir barriga
+    - Necesito definir
+    - Quiero pasar de 92 a 82 kilos
+    - Estoy en sobrepeso y quiero mejorar
+    - Quiero adelgazar de forma saludable
+    - Necesito un deficit calorico controlado
+
+- intent: pedir_entrenador_personal
+  examples: |
+    - Quiero un entrenador personal
+    - Necesito un profesional de gym
+    - Me gustaria que alguien me guie en el gimnasio
+    - Busco coach de entrenamiento
+    - Quiero supervision de tecnica
+    - Quiero ayuda profesional para el gym
+    - Quiero un monitor para progresar
+    - Necesito un entrenador personal para tecnica en sentadilla
+    - Quiero entrenador para corregir mi tecnica
+    - Busco un preparador fisico presencial
+    - Necesito coach personal de gimnasio
+    - Quiero un entrenador que me acompanie en el gym
+
+- intent: plan_nutricion_entrenamiento
+  examples: |
+    - Quiero combinar dieta y gimnasio
+    - Necesito plan nutricional junto al gym
+    - Quiero nutricionista y entrenador trabajando juntos
+    - Hazme un plan integral de comida y ejercicio
+    - Quiero un plan completo para mi objetivo
+    - Necesito coordinacion entre nutricion y entrenamiento
+    - Quiero plan semanal de comidas y rutina
+    - Quiero combinar dieta y gimnasio con un profesional de gym
+    - Necesito un plan conjunto de nutricionista y entrenador
+    - Quiero dieta para rendir mejor en el gimnasio
+    - Quiero periodizar comida y entrenamiento
+    - Necesito plan de nutricion para mi rutina de fuerza
+    - quiero un plan completo de comida + gym + estres
+    - necesito un plan para entrenar, comer bien y controlar ansiedad
+    - dame una estrategia integral con nutricion psicologia y ejercicio
+    - quiero plan semanal con comidas y rutina segun mi trabajo
+    - plan multidominio para bajar grasa sin reventarme mentalmente
+
+# =============== MODO PROFESIONAL POR ROL ===============
+- intent: profesional_nutricion_adherencia
+  examples: |
+    - Dame KPI de adherencia nutricional del paciente
+    - Soy nutricionista, que debo revisar esta semana
+    - Quiero ver riesgo nutricional y regularidad de comidas
+    - Necesito checklist clínico de nutrición
+    - Evalúa adherencia alimentaria en 7 días
+    - Qué indicadores usa un nutricionista en este caso
+    - Muéstrame foco profesional para nutrición clínica
+    - Cómo detectar mala adherencia nutricional
+    - Quiero plan de intervención nutricional por fases
+    - Qué señales de alerta nutricional debo vigilar
+
+- intent: profesional_psicologia_riesgo
+  examples: |
+    - Soy psicólogo, evalúa riesgo emocional
+    - Quiero priorizar criterios de riesgo psicológico
+    - Dame indicadores clínicos para salud mental
+    - Cómo detectar malestar sostenido en este paciente
+    - Necesito guía de intervención psicológica breve
+    - Qué revisar en psicología antes de derivar
+    - Dame estructura de sesión para riesgo medio
+    - Quiero protocolo para ansiedad y depresión
+    - Muéstrame señales de escalado clínico en psicología
+    - Qué recursos usar para regulación emocional
+
+- intent: profesional_coach_adherencia
+  examples: |
+    - Soy coach, necesito adherencia de hábitos
+    - Quiero métricas de constancia de entrenamiento
+    - Dame plan de progresión segura semanal
+    - Qué barreras de adherencia debo explorar
+    - Necesito check de recuperación y fatiga
+    - Cómo ajustar carga si hay baja energía
+    - Muéstrame KPIs de entrenamiento para coach
+    - Quiero pauta de actividad física terapéutica
+    - Dame intervención para paciente con baja constancia
+    - Qué revisar en adherencia de hábitos diarios
+
+- intent: profesional_medico_farmacoterapia
+  examples: |
+    - Soy médico, revisa farmacoterapia activa
+    - Quiero un resumen clínico de medicación
+    - Qué debo validar antes de prescribir
+    - Dame checklist de seguridad farmacológica
+    - Necesito controlar efectos adversos y adherencia
+    - Cómo coordinar medicación con psicología y nutrición
+    - Muéstrame riesgos clínicos por tratamiento
+    - Revisión médica integral del caso
+    - Quiero criterios para ajustar dosis
+    - Qué indicadores médicos seguir esta semana
+
+- intent: profesional_medicacion_consulta
+  examples: |
+    - Qué medicación se usa para ansiedad
+    - Qué fármaco puedo poner en este caso
+    - Recomiéndame medicación para depresión
+    - Dime una pauta farmacológica estándar
+    - Qué antidepresivo va mejor aquí
+    - Qué ansiolítico usaría en primera línea
+    - Tengo dudas de medicación para TCA
+    - Qué debo tener en cuenta al prescribir
+    - Necesito orientación de fármacos por diagnóstico
+    - Ayúdame con medicación de forma segura
+
+- intent: profesional_interaccion_farmacos
+  examples: |
+    - Revisa interacciones farmacológicas de este plan
+    - Hay interacción entre estos medicamentos
+    - Riesgo de QT por combinación de fármacos
+    - Quiero validar CYP e interacciones
+    - Puede mezclarse este antidepresivo con este otro
+    - Hay problema con suplementos y medicación
+    - Evalúa seguridad de combinación farmacológica
+    - Qué alerta de interacción debo vigilar
+    - Revisión de duplicidad terapéutica
+    - Comprobar interacción con alcohol
+
+- intent: profesional_recursos_trastornos
+  examples: |
+    - Dame recursos clínicos para trastornos alimentarios
+    - Necesito materiales para depresión y ansiedad
+    - Qué escalas usar para cribado psicológico
+    - Recursos profesionales para TCA y riesgo
+    - Guías de intervención para salud mental
+    - Quiero protocolos basados en evidencia
+    - Dame herramientas para evaluación clínica
+    - Qué cuestionarios usar en consulta
+    - Necesito recursos para psicoeducación familiar
+    - Qué material usar en seguimiento de trastornos
+
+- intent: profesional_escalado_clinico
+  examples: |
+    - Cuándo debo escalar este caso clínico
+    - Criterios de derivación urgente
+    - Hay riesgo alto, cómo activo protocolo
+    - Qué señales requieren intervención inmediata
+    - Escalado clínico por riesgo suicida
+    - Necesito ruta de emergencia para este paciente
+    - Cuándo derivar a urgencias psiquiátricas
+    - Dime umbrales de alerta clínica
+    - Qué hacer ante deterioro funcional severo
+    - Protocolo de seguridad en crisis
+
+- intent: profesional_coordinacion_caso
+  examples: |
+    - Necesito coordinar caso con el equipo
+    - Dame formato de coordinación interdisciplinar
+    - Cómo repartir objetivos por especialidad
+    - Quiero seguimiento clínico conjunto
+    - Plan de coordinación entre nutrición y psicología
+    - Cómo documentar decisiones del equipo
+    - Necesito resumen para comité clínico
+    - Estructura de reunión de caso semanal
+    - Cómo alinear prioridades terapéuticas
+    - Qué indicadores compartir entre especialistas
+
+- intent: profesional_plan_multidisciplinar
+  examples: |
+    - Diseña plan multidisciplinar para este paciente
+    - Quiero plan conjunto nutrición psicología medicina
+    - Dame intervención por roles profesionales
+    - Necesito plan clínico integral de 7 días
+    - Estructura de plan interdisciplinario
+    - Cómo combinar entrenamiento y salud mental
+    - Plan completo por especialidades
+    - Dime objetivos semanales por área clínica
+    - Necesito hoja de ruta terapéutica integral
+    - Crear plan coordinado con todo el equipo
+
+- intent: profesional_calorias_objetivo
+  examples: |
+    - Qué calorías objetivo pongo en este caso
+    - Necesito calcular objetivo calórico clínico
+    - Ajustar kcal para fase de pérdida de grasa
+    - Dame estrategia de calorías por evolución semanal
+    - Cómo definir calorías de mantenimiento profesionalmente
+    - Objetivo de kcal para paciente con baja adherencia
+    - Revisión de calorías prescritas
+    - Quiero criterio clínico para subir o bajar kcal
+    - Qué rango de calorías usar con este perfil
+    - Calorías objetivo para este plan nutricional
+
+- intent: profesional_ajuste_macros
+  examples: |
+    - Ajusta macros de este paciente
+    - Cómo repartir proteína carbohidratos y grasas
+    - Necesito distribución de macros por objetivo
+    - Revisión de macronutrientes en plan clínico
+    - Qué macro priorizar si hay ansiedad y hambre
+    - Quiero recalibrar proteína y carbohidratos
+    - Cómo adaptar grasas en dieta terapéutica
+    - Dame guía de ajuste de macros semanal
+    - Macros para etapa de definición con entrenamiento
+    - Ajuste de macros según adherencia
+
+- intent: profesional_gym_calorias
+  examples: |
+    - Cómo coordinar gimnasio con calorías prescritas
+    - Soy coach, cómo adapto carga según dieta
+    - Qué hacer si el paciente no cumple calorías y entrena fuerte
+    - Relación entre volumen de entrenamiento y kcal objetivo
+    - Ajuste de rutina cuando hay baja energía
+    - Quiero pautas de entrenamiento según ingesta calórica
+    - Coordinación coach nutricionista por calorías
+    - Cómo periodizar entrenamiento con objetivo de kcal
+    - Necesito guía gym con déficit calórico
+    - Plan de gym respetando dieta clínica
+
+- intent: profesional_dieta_prescrita
+  examples: |
+    - Hay dieta prescrita por nutricionista, qué hago
+    - Puedo cambiar calorías si no soy nutricionista
+    - Quién puede editar macros del paciente
+    - Cómo trabajar con dieta ya prescrita
+    - Soy psicólogo, solo debo observar la dieta
+    - Soy coach, puedo modificar la dieta del paciente
+    - Quiero reglas de edición de dieta clínica
+    - Qué hacer si la dieta prescrita no se cumple
+    - Necesito protocolo con dieta prescrita
+    - Qué especialista ajusta calorías y macros

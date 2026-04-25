@@ -2,29 +2,170 @@ version: "3.1"
 
 stories:
 
-- story: happy path
+- story: Saludo y registro de peso
   steps:
-  - intent: greet
-  - action: utter_greet
-  - intent: mood_great
-  - action: utter_happy
+  - intent: saludar
+  - action: utter_saludar
+  - intent: informar_peso
+  - action: utter_informar_peso
 
-- story: sad path 1
+- story: Estado emocional negativo y motivación
   steps:
-  - intent: greet
-  - action: utter_greet
-  - intent: mood_unhappy
-  - action: utter_cheer_up
-  - action: utter_did_that_help
-  - intent: affirm
-  - action: utter_happy
+  - intent: estado_animo_malo
+  - action: utter_estado_animo_malo
+  - intent: pedir_motivacion
+  - action: utter_pedir_motivacion
 
-- story: sad path 2
+- story: Plan de nutrición
   steps:
-  - intent: greet
-  - action: utter_greet
-  - intent: mood_unhappy
-  - action: utter_cheer_up
-  - action: utter_did_that_help
-  - intent: deny
-  - action: utter_goodbye
+  - intent: pedir_plan_nutricion
+  - action: utter_pedir_plan_nutricion
+  - intent: preguntar_alimentos
+  - action: utter_preguntar_alimentos
+
+- story: Ejercicio
+  steps:
+  - intent: pedir_plan_ejercicio
+  - action: utter_pedir_plan_ejercicio
+  - intent: preguntar_tecnica_ejercicio
+  - action: utter_preguntar_tecnica_ejercicio
+
+- story: Salud mental
+  steps:
+  - intent: estado_animo_malo
+  - action: utter_estado_animo_malo
+  - intent: pedir_meditacion
+  - action: utter_pedir_meditacion
+
+- story: Buscar profesional
+  steps:
+  - intent: buscar_profesional
+  - action: utter_buscar_profesional
+  - intent: solicitar_cita
+  - action: utter_solicitar_cita
+
+- story: Problema nutricional con derivacion
+  steps:
+  - intent: problema_nutricional
+  - action: utter_problema_nutricional
+  - intent: buscar_profesional
+  - action: utter_buscar_profesional
+  - intent: solicitar_cita
+  - action: utter_solicitar_cita
+
+- story: Falta de apetito concreta
+  steps:
+  - intent: falta_apetito
+  - action: utter_falta_apetito
+  - intent: pedir_plan_nutricion
+  - action: utter_pedir_plan_nutricion
+
+- story: Subir peso con gym
+  steps:
+  - intent: objetivo_subir_peso
+  - action: utter_objetivo_subir_peso
+  - intent: pedir_plan_ejercicio
+  - action: utter_pedir_plan_ejercicio
+  - intent: pedir_entrenador_personal
+  - action: utter_pedir_entrenador_personal
+
+- story: Bajar peso con plan integrado
+  steps:
+  - intent: objetivo_bajar_peso
+  - action: utter_objetivo_bajar_peso
+  - intent: plan_nutricion_entrenamiento
+  - action: utter_plan_nutricion_entrenamiento
+
+- story: Flujo IMC completo
+  steps:
+  - intent: saludar
+  - action: utter_saludar
+  - intent: informar_altura
+  - action: utter_informar_altura
+  - intent: calular_imc
+  - action: utter_calular_imc
+
+- story: Registro de habitos diarios
+  steps:
+  - intent: registrar_comida
+  - action: utter_registrar_comida
+  - intent: registrar_ejercicio
+  - action: utter_registrar_ejercicio
+  - intent: agradecimiento
+  - action: utter_agradecimiento
+
+- story: Conversacion positiva y cierre
+  steps:
+  - intent: estado_animo_bueno
+  - action: utter_estado_animo_bueno
+  - intent: charla_casual
+  - action: utter_charla_casual
+  - intent: despedir
+  - action: utter_despedir
+
+- story: Sueno y consejo general
+  steps:
+  - intent: hablar_sueno
+  - action: utter_hablar_sueno
+  - intent: pedir_consejo_general
+  - action: utter_pedir_consejo_general
+  - intent: afirmar
+  - action: utter_afirmar
+
+- story: Informacion y ajuste
+  steps:
+  - intent: informacion_app
+  - action: utter_informacion_app
+  - intent: negar
+  - action: utter_negar
+  - intent: ayuda_general
+  - action: utter_ayuda_general
+
+- story: Nutricionista en modo profesional
+  steps:
+  - intent: profesional_nutricion_adherencia
+  - action: utter_profesional_nutricion_adherencia
+  - intent: profesional_plan_multidisciplinar
+  - action: utter_profesional_plan_multidisciplinar
+
+- story: Psicologia con escalado clinico
+  steps:
+  - intent: profesional_psicologia_riesgo
+  - action: utter_profesional_psicologia_riesgo
+  - intent: profesional_escalado_clinico
+  - action: utter_profesional_escalado_clinico
+
+- story: Coach y coordinacion de caso
+  steps:
+  - intent: profesional_coach_adherencia
+  - action: utter_profesional_coach_adherencia
+  - intent: profesional_coordinacion_caso
+  - action: utter_profesional_coordinacion_caso
+
+- story: Medico farmacoterapia y seguridad
+  steps:
+  - intent: profesional_medico_farmacoterapia
+  - action: utter_profesional_medico_farmacoterapia
+  - intent: profesional_interaccion_farmacos
+  - action: utter_profesional_interaccion_farmacos
+  - intent: profesional_medicacion_consulta
+  - action: utter_profesional_medicacion_consulta
+
+- story: Recursos clínicos para trastornos
+  steps:
+  - intent: profesional_recursos_trastornos
+  - action: utter_profesional_recursos_trastornos
+
+- story: Calorías y macros profesionales
+  steps:
+  - intent: profesional_calorias_objetivo
+  - action: utter_profesional_calorias_objetivo
+  - intent: profesional_ajuste_macros
+  - action: utter_profesional_ajuste_macros
+
+- story: Coordinación gym con dieta prescrita
+  steps:
+  - intent: profesional_gym_calorias
+  - action: utter_profesional_gym_calorias
+  - intent: profesional_dieta_prescrita
+  - action: utter_profesional_dieta_prescrita

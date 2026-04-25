@@ -4,6 +4,8 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
+import string
 import time
 from typing import Optional
 from passlib.context import CryptContext
@@ -23,6 +25,22 @@ def verificar_contrasena(password_plana: str, password_hash: str) -> bool:
 def generar_hash_contrasena(password_plana: str) -> str:
     """Genera hash bcrypt de una contrasena."""
     return pwd_context.hash(password_plana)
+
+
+def generar_contrasena_temporal(longitud: int = 12) -> str:
+    """Genera una contrasena temporal segura y legible para uso puntual."""
+    if longitud < 10:
+        longitud = 10
+
+    base = string.ascii_letters + string.digits + "!@#$%"
+    while True:
+        candidato = "".join(secrets.choice(base) for _ in range(longitud))
+        if (
+            any(c.islower() for c in candidato)
+            and any(c.isupper() for c in candidato)
+            and any(c.isdigit() for c in candidato)
+        ):
+            return candidato
 
 
 def autenticar_usuario(db: Session, email: str, password_plana: str) -> Optional[Usuario]:

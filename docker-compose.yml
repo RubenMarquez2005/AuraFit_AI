@@ -1,0 +1,110 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: aurafit_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-aurafit_db}
+      MYSQL_USER: ${MYSQL_USER:-aurafit}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aurafit_pass}
+    ports:
+      - "${MYSQL_HOST_PORT:-3307}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  rasa:
+    build:
+      context: ./ai_rasa
+      dockerfile: Dockerfile
+    container_name: aurafit_rasa
+    restart: unless-stopped
+    environment:
+      RASA_SKIP_TRAIN: "true"
+    ports:
+      - "5005:5005"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:5005/status\")' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aurafit_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rasa:
+        condition: service_started
+    environment:
+      APP_NAME: AuraFit AI
+      APP_VERSION: 0.1.0
+      DEBUG: "True"
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${MYSQL_USER:-aurafit}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-aurafit_pass}
+      DB_NAME: ${MYSQL_DATABASE:-aurafit_db}
+      API_HOST: 0.0.0.0
+      API_PORT: 8001
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-aurafit_dev_secret_cambiar}
+      AUTH_TOKEN_EXP_MINUTES: 1440
+      IA_PROVIDER: ${IA_PROVIDER:-gemini}
+      IA_RESPONSE_MODE: ${IA_RESPONSE_MODE:-ultra_pro}
+      IA_AUTONOMOUS_MODE: ${IA_AUTONOMOUS_MODE:-True}
+      IA_TESTING_MODE: ${IA_TESTING_MODE:-False}
+      IA_FALLBACK_LOCAL: ${IA_FALLBACK_LOCAL:-True}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_TEMPERATURE: ${GEMINI_TEMPERATURE:-0.2}
+      GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-2400}
+      IA_ATTACHMENTS_MAX_MB: ${IA_ATTACHMENTS_MAX_MB:-25}
+      EDEN_API_KEY: ${EDEN_API_KEY:-}
+      EDEN_MODEL: ${EDEN_MODEL:-@edenai}
+      EDEN_ROUTER_CANDIDATES: ${EDEN_ROUTER_CANDIDATES:-}
+      EDEN_TIMEOUT_SECONDS: ${EDEN_TIMEOUT_SECONDS:-60}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-}
+      QWEN_MODEL: ${QWEN_MODEL:-qwen3-32b-instruct}
+      QWEN_SUPPORTS_MULTIMODAL: ${QWEN_SUPPORTS_MULTIMODAL:-False}
+      PREMIUM_MEDIA_ENABLED: ${PREMIUM_MEDIA_ENABLED:-True}
+      PREMIUM_IMAGE_PROVIDER: ${PREMIUM_IMAGE_PROVIDER:-openai}
+      PREMIUM_VIDEO_PROVIDER: ${PREMIUM_VIDEO_PROVIDER:-replicate}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-gpt-image-1}
+      OPENAI_IMAGE_SIZE: ${OPENAI_IMAGE_SIZE:-1024x1024}
+      PREMIUM_IMAGE_RETRIES: ${PREMIUM_IMAGE_RETRIES:-2}
+      REPLICATE_API_TOKEN: ${REPLICATE_API_TOKEN:-}
+      REPLICATE_VIDEO_MODEL: ${REPLICATE_VIDEO_MODEL:-kwaivgi/kling-v1.6-standard}
+      REPLICATE_VIDEO_FALLBACK_MODELS: ${REPLICATE_VIDEO_FALLBACK_MODELS:-}
+      PREMIUM_VIDEO_RETRIES: ${PREMIUM_VIDEO_RETRIES:-2}
+      PREMIUM_VIDEO_POLL_SECONDS: ${PREMIUM_VIDEO_POLL_SECONDS:-2.0}
+      PREMIUM_VIDEO_TIMEOUT_SECONDS: ${PREMIUM_VIDEO_TIMEOUT_SECONDS:-120}
+      RASA_WEBHOOK_URL: http://rasa:5005/webhooks/rest/webhook
+      RASA_TIMEOUT_SECONDS: ${RASA_TIMEOUT_SECONDS:-20}
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: aurafit_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "3000:80"
+
+volumes:
+  mysql_data:

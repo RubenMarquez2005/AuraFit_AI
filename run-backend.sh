@@ -28,5 +28,11 @@ echo "🚀 Backend corriendo en http://127.0.0.1:8001"
 echo "📚 Documentación en http://127.0.0.1:8001/docs"
 echo ""
 
-python -m uvicorn main:app --host 127.0.0.1 --port 8001 --reload
+# Por defecto NO usamos --reload para evitar caidas al iniciar en segundo plano.
+# Si necesitas autoreload en desarrollo: AURAFIT_BACKEND_RELOAD=1 ./run-backend.sh
+if [[ "${AURAFIT_BACKEND_RELOAD:-0}" == "1" ]]; then
+    python -m uvicorn main:app --host 127.0.0.1 --port 8001 --reload
+else
+    python -m uvicorn main:app --host 127.0.0.1 --port 8001
+fi
 

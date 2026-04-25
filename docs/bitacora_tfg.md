@@ -142,3 +142,107 @@
 - Se realiza actualizacion extensa de `docs/memoria_tfg.md`.
 - Se amplian resultados, incidencias, evidencias, analisis y justificacion de decisiones tecnicas.
 - Se deja trazabilidad alineada entre codigo, ejecucion real y documento de memoria.
+
+## 2026-04-06
+### Entrega funcional completada (bloque clinico-hospitalario + UX paciente)
+- Se cierra el flujo de alta privada para especialistas con clave interna.
+- Se mantiene alta publica unicamente para pacientes.
+- Se implementa mejora visual del IMC en home de paciente con tarjeta tipo rosca y flecha.
+- Se incorpora accion directa para solicitar cita con nutricion desde la misma tarjeta IMC.
+
+### Seguridad y control de acceso
+- Backend: endpoint dedicado para alta profesional con validacion de clave y restriccion de roles permitidos.
+- Frontend: formulario de auth ampliado con modo de registro profesional privado (rol + clave).
+- Se confirma que la frontera real de seguridad se mantiene en backend.
+
+### Funcionalidad hospitalaria avanzada
+- Auditoria temporal de checklist clinico por paciente:
+	- Modelo persistente de historial.
+	- Versionado incremental por cada actualizacion.
+	- Endpoint de consulta para timeline clinico.
+- Severidad sugerida automatica desde KPIs:
+	- Scoring heuristico trazable.
+	- Respuesta con severidad, puntuacion y motivos.
+- Export PDF hospitalario:
+	- Incluye protocolo activo.
+	- Incluye checklist aplicado.
+	- Incluye ruta de escalado y observaciones.
+
+### Flujo paciente IMC -> cita nutricional
+- Se anade endpoint paciente para solicitar cita de nutricion.
+- Si existe derivacion abierta de nutricion, se reutiliza para evitar duplicidad.
+- Si no existe, se crea derivacion pendiente al nutricionista disponible.
+- El flujo queda enlazado con CTA desde tarjeta IMC en frontend.
+
+### Pruebas automatizadas agregadas (backend)
+- Nuevo archivo de test: `backend/tests/test_cita_nutricion.py`.
+- Casos cubiertos:
+	- Creacion de derivacion nutricional desde paciente.
+	- Reutilizacion de derivacion abierta.
+	- Integracion completa IMC -> solicitud cita -> consulta de bandeja de derivaciones.
+- Ejecucion validada:
+	- 3 tests ejecutados.
+	- 3 tests OK.
+
+### Evidencia de estado final para defensa
+- Backend sin errores de analisis en archivos modificados.
+- Frontend sin errores de analisis en archivos modificados.
+- Documentacion ampliada:
+	- Memoria principal actualizada.
+	- Dossier integral nuevo en `docs/documentacion_tfg_integral_2026.md`.
+	- Validacion RASA extendida con estado actual.
+
+### Siguiente paso recomendado de mantenimiento
+- Mantener actualizacion incremental de bitacora tras cada bloque de funcionalidad.
+- Adjuntar capturas de demo (UI, endpoints, PDFs, tests) como anexos para defensa.
+
+## 2026-04-06 (ampliacion documental de memoria)
+### Reestructuracion completa de memoria segun guia de 3 documentos
+- Se rehace `docs/memoria_tfg.md` con estructura formal obligatoria:
+	- Portada
+	- Indice
+	- Resumen/Introduccion
+	- Justificacion del proyecto
+	- Objetivos (general + especificos en infinitivo)
+	- Desarrollo (fundamentacion teorica, materiales y metodos, resultados, analisis)
+	- Conclusiones
+	- Lineas de investigacion futuras
+	- Bibliografia/Webgrafia en formato APA
+	- Anexos
+	- Apartados opcionales (retos y agradecimientos)
+- Se amplian contenidos para version extensa y defendible (narrativa tecnica completa, metodologia, comparativa con objetivos y plan de mejora).
+- Se deja la memoria preparada para maquetacion final en PDF (indice con placeholders de pagina).
+
+### Separacion final por documentos independientes
+- Se divide formalmente la memoria en tres archivos para respetar el esquema docente por entregas:
+	- `docs/memoria_documento_1_portada_indice_resumen_justificacion_objetivos.md`
+	- `docs/memoria_documento_2_desarrollo.md`
+	- `docs/memoria_documento_3_conclusiones_futuro_bibliografia_anexos.md`
+- Se convierte `docs/memoria_tfg.md` en indice maestro con enlaces a los tres documentos y a la documentacion de apoyo de defensa.
+- Se amplian contenidos del Documento 2 con inventario tecnico completo (frontend, backend, modelos, endpoints, pruebas y flujos criticos) para no omitir detalle de implementacion.
+
+## 2026-04-06 (ampliacion extrema por detalle)
+### Ajuste solicitado: "mucho mas problemas y mas desarrollo"
+- Se refuerzan los tres documentos con formato dual por seccion: resumen breve + desarrollo amplio.
+- Documento 1:
+	- se amplian resumen, justificacion y objetivos con mayor profundidad argumental y trazabilidad objetivo -> evidencia.
+- Documento 2:
+	- se incorpora bloque detallado de incidencias reales (9 problemas) con causa raiz, impacto, solucion y evidencia de cierre.
+	- se anaden lecciones tecnicas consolidadas y madurez por dimension.
+- Documento 3:
+	- se amplian conclusiones y lineas futuras con plan por fases.
+	- se anade checklist operativo de defensa y plantilla requisito -> evidencia en anexos.
+- Se actualiza `docs/memoria_tfg.md` para reflejar explicitamente el nuevo formato y alcance ampliado.
+
+## 2026-04-06 (hiper expansion final por solicitud)
+### Ajuste solicitado: "mas en todos los apartados de cada documento"
+- Documento 2 ampliado a version hiper-extensa:
+	- arquitectura interna detallada,
+	- diseño de base de datos por bloques funcionales,
+	- flujos por endpoint con descripcion operativa.
+- Documento 1 reforzado con mayor profundidad en planteamiento, riesgos del enfoque y consistencia objetivo-evidencia.
+- Documento 3 reforzado con:
+	- retos profesionales/personales ampliados,
+	- agradecimientos extendidos incluyendo empresa de practicas,
+	- texto formal editable para agradecimientos de entrega final.
+- Resultado: memoria separada en 3 documentos con mayor densidad argumental y tecnica en todos los apartados.

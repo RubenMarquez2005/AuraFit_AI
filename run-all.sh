@@ -80,11 +80,16 @@ while true; do
             sleep 2
             run_in_terminal "run-rasa.sh" "RASA"
             sleep 2
-            echo "✅ Todo iniciado. Abre otra ventana con opción 3 para el Frontend Web"
+            run_in_terminal "run-web.sh" "Frontend Web"
+            echo "✅ Todo iniciado: Backend + RASA + Frontend Web"
             ;;
         6)
             echo "📖 Abriendo documentación..."
-            open "$PROJECT_ROOT/docs/bitacora_tfg.md" 2>/dev/null || cat "$PROJECT_ROOT/docs/bitacora_tfg.md"
+            if [ -f "$PROJECT_ROOT/docs/bitacora_tfg.md" ]; then
+                open "$PROJECT_ROOT/docs/bitacora_tfg.md" 2>/dev/null || cat "$PROJECT_ROOT/docs/bitacora_tfg.md"
+            else
+                echo "⚠️ No se encontró docs/bitacora_tfg.md"
+            fi
             ;;
         0)
             echo "👋 ¡Hasta pronto!"

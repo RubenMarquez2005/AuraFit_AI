@@ -37,6 +37,32 @@ Plataforma de IA para salud mental, nutrición, entrenamientos y bienestar integ
 
 ## 🚀 Inicio Rápido
 
+### Opción 0: Docker (Todo el proyecto con un comando)
+
+Levanta frontend + backend + RASA + MySQL en contenedores.
+
+```bash
+./docker-up.sh
+```
+
+Servicios disponibles:
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8001/docs
+- RASA: http://localhost:5005
+- MySQL: localhost:3307 (por defecto)
+
+Para detener todo:
+
+```bash
+./docker-down.sh
+```
+
+Si quieres personalizar claves o proveedor IA (Gemini/Qwen), copia y edita:
+
+```bash
+cp .env.docker.example .env
+```
+
 ### Opción 1: Ejecutor Automático (Recomendado)
 
 ```bash
@@ -147,6 +173,26 @@ AuraFit_AI/
     ├── run-rasa.sh
     ├── run-web.sh
     └── run-macos.sh
+```
+
+## 📚 Documentación TFG (Actualizada)
+
+- Documento principal de memoria: `docs/memoria_tfg.md`
+- Bitácora cronológica de avances: `docs/bitacora_tfg.md`
+- Dossier técnico integral de defensa: `docs/documentacion_tfg_integral_2026.md`
+- Guion completo de defensa (narrativa + demo + tribunal): `docs/guion_defensa_tfg_completo.md`
+- Validación NLU y estrategia RASA: `RASA_VALIDATION_TFG.md`
+
+## ✅ Evidencia de pruebas backend
+
+- Suite RBAC clínico: `backend/tests/test_rbac_clinico.py`
+- Suite cita nutricional e integración IMC->cita: `backend/tests/test_cita_nutricion.py`
+
+Ejecución recomendada desde `backend`:
+
+```bash
+/Users/rubenperez/Documents/AuraFit_AI/backend/venv/bin/python -m unittest tests.test_rbac_clinico -v
+/Users/rubenperez/Documents/AuraFit_AI/backend/venv/bin/python -m unittest tests.test_cita_nutricion -v
 ```
 
 ## 🔌 Endpoints Principales
