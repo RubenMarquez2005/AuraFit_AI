@@ -43,12 +43,6 @@ class Settings(BaseSettings):
     IA_FALLBACK_LOCAL: bool = True
     PREMIUM_MEDIA_MOCK: bool = False
 
-    # Configuracion del servicio de IA (Eden AI)
-    EDEN_API_KEY: str = ""
-    EDEN_MODEL: str = "@edenai"
-    EDEN_ROUTER_CANDIDATES: str = ""
-    EDEN_TIMEOUT_SECONDS: int = 60
-
     # Configuracion del servicio de IA (Qwen / OpenAI-compatible)
     QWEN_API_KEY: str = ""
     QWEN_BASE_URL: str = ""
@@ -77,6 +71,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = str(ENV_PATH)
         case_sensitive = True
+        extra = "ignore"
 
     @property
     def DATABASE_URL(self) -> str:

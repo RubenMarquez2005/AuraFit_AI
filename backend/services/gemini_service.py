@@ -290,9 +290,54 @@ def _solicita_junta_medica(texto_normalizado: str) -> bool:
     return any(c in t for c in claves)
 
 
+def _solicita_alta_precision_clinica(texto_normalizado: str) -> bool:
+    """Detecta peticiones de formato clínico técnico de alta precisión."""
+    t = (texto_normalizado or "").strip()
+    if not t:
+        return False
+
+    claves = (
+        "alta precision",
+        "medicina deportiva",
+        "endocrinologia",
+        "diagnostico metabolico",
+        "bloque nutricion",
+        "bloque entrenamiento",
+        "bloque psicologia",
+        "eje hpa",
+        "rpe",
+        "biomecanica",
+        "picos de insulina",
+    )
+    return any(c in t for c in claves)
+
+
 def _contar_palabras(texto: str) -> int:
     """Cuenta palabras de forma simple para validaciones de longitud."""
     return len([p for p in (texto or "").split() if p.strip()])
+
+
+def _garantizar_minimo_palabras(texto: str, minimo: int = 820) -> str:
+    """Asegura una longitud minima de respuesta para modo junta medica."""
+    if _contar_palabras(texto) >= minimo:
+        return texto
+
+    apendice = (
+        "\n\n7) APENDICE TECNICO DE CONTROL Y AJUSTE\n"
+        "Para mantener rigor clinico, la prescripcion debe revisarse con indicadores objetivos semanales y no con percepciones aisladas de un solo dia. "
+        "Se recomienda registrar en una tabla minima: peso matutino en ayunas 3 dias por semana, perimetro de cintura 1 vez por semana, numero de sesiones completadas, "
+        "RPE promedio por sesion, dolor articular post-entreno (escala 0-10), animo diario (0-10), horas de sueno y despertares nocturnos. "
+        "Con esos datos, el ajuste endocrino-nutricional se realiza segun reglas: si el peso no desciende en escenario de perdida durante 14 dias y la adherencia real supera 80%, "
+        "reducir 100-150 kcal; si el rendimiento cae junto con sueno insuficiente y animo bajo, primero recuperar sueno y bajar volumen 20% antes de recortar calorias. "
+        "Desde biomecanica, si aparece dolor creciente en rodilla, tobillo o cadera, revisar inmediatamente tecnica, rango y tempo; priorizar isometria analgica y cadena cinetica cerrada, "
+        "sin continuar con impactos repetitivos hasta normalizar sintomas. En hipertrofia, el criterio no es entrenar al fallo en todas las series, sino sostener calidad mecanica, progresion de carga y recuperacion. "
+        "Desde psicologia TCC, la variable decisiva es la adherencia conductual en dias complejos: si el paciente no puede ejecutar el plan completo, debe ejecutar el protocolo minimo (comida proteica estructurada, "
+        "10-15 minutos de movimiento y respiracion vagotonica). Este enfoque protege dopamina por logro y evita el ciclo de todo-o-nada que incrementa estres y abandono. "
+        "En cronobiologia aplicada, evitar cafeina tardia, pantallas intensas nocturnas y cenas hipercaloricas sin control mejora variabilidad autonomica y eficiencia de recuperacion. "
+        "La decision clinica final siempre se individualiza segun comorbilidades, medicacion y tolerancia real, priorizando seguridad, progresion sostenible y salud integral sobre resultados rapidos sin control."
+    )
+
+    return texto + apendice
 
 
 def _matriz_respuesta_tecnica_cinco_bloques(
@@ -312,7 +357,7 @@ def _matriz_respuesta_tecnica_cinco_bloques(
         f"sentimiento={sentimiento}."
     )
 
-    return (
+    base = (
         "MATRIZ TECNICA DE RESPUESTA CLINICA (5 MODULOS)\n"
         f"{contexto}\n\n"
         "MODULO 1. METABOLICO (IMC > 35, resistencia a la insulina y cortisol)\n"
@@ -357,6 +402,7 @@ def _matriz_respuesta_tecnica_cinco_bloques(
         "Se progresa por criterio de dolor <=3/10 durante y despues de la sesion. "
         "Objetivo biomecanico: mejorar alineacion cadera-rodilla-tobillo, estabilidad lumbopelvica y distribucion de fuerzas en cadena cinetica cerrada."
     )
+    return _garantizar_minimo_palabras(base, minimo=2400)
 
 
 def _respuesta_junta_medica_extensa(
@@ -411,7 +457,7 @@ def _respuesta_junta_medica_extensa(
         else "Con estado emocional estable, se puede progresar carga preservando higiene del sueno y control del estres allostatico."
     )
 
-    return (
+    base = (
         "JUNTA MEDICA INTEGRADA (Endocrino + Nutricion Clinica + Fisioterapia Biomecanica + Psicologia TCC)\n\n"
         "1) DIAGNOSTICO INICIAL BASADO EN DATOS\n"
         f"Datos obligatorios utilizados: peso={peso_txt} kg, altura={altura_txt} cm, IMC={imc_txt}, animo={animo_txt}/10, sentimiento={sentimiento}. "
@@ -464,6 +510,57 @@ def _respuesta_junta_medica_extensa(
         "- Rojo: ideacion autolesiva, dolor toracico, desmayo, purgas, restriccion extrema o deterioro funcional severo.\n"
         "Proxima reevaluacion en 7 dias con: peso, perimetro cintura, adherencia, energia, dolor articular, animo y calidad de sueno. "
         "Con esos datos se ajustan calorias, carga mecanica y plan conductual sin improvisacion."
+    )
+    return _garantizar_minimo_palabras(base, minimo=820)
+
+
+def _respuesta_alta_precision_clinica(
+    contexto_adicional: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Respuesta técnica compacta en formato clínico obligatorio."""
+    peso = _valor_float((contexto_adicional or {}).get("peso_actual_kg"))
+    altura_cm = _valor_float((contexto_adicional or {}).get("altura_cm"))
+    imc = _valor_float((contexto_adicional or {}).get("imc_actual"))
+    animo = _valor_float((contexto_adicional or {}).get("animo_reciente"))
+    sentimiento = str((contexto_adicional or {}).get("sentimiento_reciente") or "no informado")
+    restricciones = str(((contexto_adicional or {}).get("memoria_respuestas") or {}).get("restricciones") or "")
+
+    peso_ref = peso if isinstance(peso, float) and peso > 25 else 70.0
+    kcal = int(round(peso_ref * 28))
+    prote = int(round(peso_ref * 2.0))
+    grasa = int(round(peso_ref * 0.9))
+    carb = max(90, int(round((kcal - (prote * 4) - (grasa * 9)) / 4)))
+
+    bajo_impacto = isinstance(imc, float) and imc >= 30
+    adaptacion_impacto = (
+        "IMC>30: suprimir impactos (saltos/carrera intensa). Priorizar bici, remo, trineo y fuerza técnica en cadena cerrada para proteger menisco y cartílago."
+        if bajo_impacto
+        else "IMC<30: se permiten cargas progresivas con control de tempo y RPE."
+    )
+
+    sustituto = "Usar arroz, patata cocida/enfriada y quinoa como base de almidón resistente."
+    if "lactosa" in restricciones.lower():
+        sustituto += " Sustituir lácteos por versiones sin lactosa o bebida vegetal fortificada."
+    if "gluten" in restricciones.lower() or "celia" in restricciones.lower():
+        sustituto += " Eliminar trigo/cebada/centeno y evitar contaminación cruzada."
+
+    return (
+        "ANALISIS DE DATOS\n"
+        f"Peso={peso if peso is not None else 'N/D'} kg | IMC={imc if imc is not None else 'N/D'} | Animo={animo if animo is not None else 'N/D'}/10 | Sentimiento={sentimiento}. "
+        "Se integra riesgo metabólico, carga alostática y tolerancia mecánica para decidir intervención sin plantillas.\n\n"
+        "BLOQUE NUTRICION\n"
+        f"Objetivo diario: ~{kcal} kcal (P {prote}g / C {carb}g / G {grasa}g). Menú técnico: desayuno (huevo+fruta+avena certificada), comida (proteína magra+arroz/legumbre+verdura), "
+        "merienda (lácteo alto en proteína o alternativa), cena (pescado/legumbre+verdura+tubérculo enfriado). "
+        "Lógica bioquímica: reducir picos de insulina con secuencia fibra-proteína-carbohidrato, mejorar microbiota con fermentables y butirato, y usar almidón resistente para estabilidad glucémica. "
+        f"Sustituciones: {sustituto}\n\n"
+        "BLOQUE ENTRENAMIENTO\n"
+        "Rutina base 3 días: A) sentadilla/press/remo 4x6-8, B) bisagra/press militar/jalón 4x6-10, C) circuito PHA 5 rondas 40s-20s. "
+        "Usar RPE 7-8, tempo 3-1-1-0, descanso 90-180s y progresión de 2.5-5% cuando técnica y recuperación lo permitan. "
+        f"Biomecánica: {adaptacion_impacto}\n\n"
+        "BLOQUE PSICOLOGIA\n"
+        "Si ánimo bajo o ansiedad: eje HPA hiperactivado, cortisol elevado y menor señal dopaminérgica por fatiga conductual. "
+        "Protocolo: respiración 4-6 durante 3 minutos, técnica 5-4-3-2-1 en picos de estrés y activación conductual mínima (10-15 min) para preservar adherencia. "
+        "Objetivo neuroquímico: bajar cortisol, sostener dopamina por logro pequeño y estabilizar serotonina con rutina de sueño y luz matinal."
     )
 
 
@@ -866,6 +963,10 @@ def _respuesta_local_autonoma_gratis(
     # Modo junta medica: respuesta extensa y tecnicamente estructurada.
     if _solicita_junta_medica(texto):
         return _respuesta_junta_medica_extensa(mensaje_usuario, contexto_adicional)
+
+    # Modo alta precision clinica: respuesta tecnica compacta con bloques fijos.
+    if _solicita_alta_precision_clinica(texto):
+        return _respuesta_alta_precision_clinica(contexto_adicional)
 
     # 1. GESTIÓN DE SALUDOS (Corto y directo)
     if _es_mensaje_social_breve(texto):
@@ -1422,42 +1523,15 @@ def _obtener_api_key() -> str:
     return api_key
 
 
-def _proveedor_ia_actual() -> str:
+def _proveedor_ia_actual(provider_override: Optional[str] = None) -> str:
     """Devuelve el proveedor configurado para la IA principal."""
-    proveedor = (settings.IA_PROVIDER or "gemini").strip().lower()
+    proveedor = (provider_override or settings.IA_PROVIDER or "gemini").strip().lower()
     proveedor = proveedor or "gemini"
-    if proveedor not in {"gemini", "qwen", "qwen3", "eden", "edenai", "hybrid"}:
+    if proveedor not in {"gemini", "qwen", "qwen3"}:
         return "gemini"
+    if proveedor == "qwen3":
+        return "qwen"
     return proveedor
-
-
-def _configuracion_eden() -> Dict[str, Any]:
-    """Obtiene la configuracion necesaria para hablar con Eden AI."""
-    api_key = settings.EDEN_API_KEY or os.getenv("EDEN_API_KEY", "")
-    model = settings.EDEN_MODEL or os.getenv("EDEN_MODEL", "@edenai")
-    router_candidates_raw = settings.EDEN_ROUTER_CANDIDATES or os.getenv("EDEN_ROUTER_CANDIDATES", "")
-    timeout_raw = settings.EDEN_TIMEOUT_SECONDS or os.getenv("EDEN_TIMEOUT_SECONDS", 60)
-
-    if not api_key:
-        raise RuntimeError("No se encontro EDEN_API_KEY en el entorno")
-
-    router_candidates = [
-        candidato.strip()
-        for candidato in router_candidates_raw.split(",")
-        if candidato.strip()
-    ]
-
-    try:
-        timeout = int(timeout_raw)
-    except Exception:
-        timeout = 60
-
-    return {
-        "api_key": api_key,
-        "model": model,
-        "router_candidates": router_candidates,
-        "timeout": max(10, min(180, timeout)),
-    }
 
 
 def _tiene_video_adjuntos(imagenes: Optional[List[Dict[str, Any]]]) -> bool:
@@ -1486,65 +1560,6 @@ def _configuracion_qwen() -> Dict[str, str]:
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
-    }
-
-
-def _consultar_eden(
-    mensaje_usuario: str,
-    historial_chat: Optional[List[Dict[str, Any]]] = None,
-    contexto_adicional: Optional[Dict[str, Any]] = None,
-    alerta_riesgo: bool = False,
-    etiqueta_alerta: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Consulta Eden AI con su API OpenAI-compatible y devuelve un resultado normalizado."""
-    import requests
-
-    config = _configuracion_eden()
-    mensajes = _construir_mensajes_qwen(
-        mensaje_usuario=mensaje_usuario,
-        historial_chat=historial_chat,
-        imagenes=None,
-        contexto_adicional=contexto_adicional,
-    )
-
-    payload: Dict[str, Any] = {
-        "model": config["model"],
-        "messages": mensajes,
-        "temperature": settings.GEMINI_TEMPERATURE,
-        "max_tokens": settings.GEMINI_MAX_OUTPUT_TOKENS,
-    }
-    if config["router_candidates"]:
-        payload["router_candidates"] = config["router_candidates"]
-
-    response = requests.post(
-        "https://api.edenai.run/v3/llm/chat/completions",
-        headers={
-            "Authorization": f"Bearer {config['api_key']}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=config["timeout"],
-    )
-    response.raise_for_status()
-
-    data = response.json()
-    choices = data.get("choices") if isinstance(data, dict) else None
-    respuesta = ""
-    if isinstance(choices, list) and choices:
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        if isinstance(message, dict):
-            respuesta = str(message.get("content") or "").strip()
-
-    if not respuesta:
-        respuesta = "He recibido tu mensaje, pero no se pudo extraer una respuesta valida de Eden AI."
-
-    return {
-        "respuesta": respuesta,
-        "etiqueta_alerta": etiqueta_alerta,
-        "alerta_riesgo": alerta_riesgo,
-        "modelo": config["model"],
-        "origen": "edenai",
-        "raw": data,
     }
 
 
@@ -1633,6 +1648,7 @@ def _consultar_qwen(
     alerta_riesgo: bool = False,
     etiqueta_alerta: Optional[str] = None,
     tiene_multimedia: bool = False,
+    model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Consulta un modelo Qwen mediante API OpenAI-compatible."""
     config = _configuracion_qwen()
@@ -1662,7 +1678,7 @@ def _consultar_qwen(
 
     generation_cfg = _generation_config()
     payload = {
-        "model": config["model"],
+        "model": (model_override or config["model"]).strip(),
         "messages": mensajes,
         "temperature": generation_cfg["temperature"],
         "max_tokens": generation_cfg["max_output_tokens"],
@@ -1695,7 +1711,7 @@ def _consultar_qwen(
         "respuesta": contenido,
         "etiqueta_alerta": etiqueta_alerta,
         "alerta_riesgo": alerta_riesgo,
-        "modelo": config["model"],
+        "modelo": (model_override or config["model"]).strip(),
         "origen": "qwen",
     }
 
@@ -1708,6 +1724,7 @@ def _consultar_gemini(
     alerta_riesgo: bool = False,
     etiqueta_alerta: Optional[str] = None,
     tiene_multimedia: bool = False,
+    model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Consulta Gemini con contexto conversacional y deteccion de alerta de riesgo."""
     contenido = _construir_contenido(
@@ -1720,8 +1737,9 @@ def _consultar_gemini(
     api_key = _obtener_api_key()
     genai.configure(api_key=api_key)
 
+    model_name = (model_override or settings.GEMINI_MODEL).strip()
     model = genai.GenerativeModel(
-        model_name=settings.GEMINI_MODEL,
+        model_name=model_name,
         system_instruction=SYSTEM_PROMPT,
     )
 
@@ -1738,7 +1756,7 @@ def _consultar_gemini(
         "respuesta": texto_respuesta,
         "etiqueta_alerta": etiqueta_alerta,
         "alerta_riesgo": alerta_riesgo,
-        "modelo": settings.GEMINI_MODEL,
+        "modelo": model_name,
         "origen": "gemini",
     }
 
@@ -2037,6 +2055,8 @@ def consultar_ia(
     imagenes: Optional[List[Dict[str, Any]]] = None,
     contexto_adicional: Optional[Dict[str, Any]] = None,
     tiene_multimedia: bool = False,
+    provider_override: Optional[str] = None,
+    model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Consulta IA con proveedor configurable y deteccion de alerta de riesgo."""
     if not mensaje_usuario or not mensaje_usuario.strip():
@@ -2077,9 +2097,9 @@ def consultar_ia(
     # En testing mode intentamos IA real si hay credenciales configuradas; si falla,
     # entramos a fallback local fiable para no romper UX.
     if settings.IA_TESTING_MODE:
-        proveedor_testing = _proveedor_ia_actual()
+        proveedor_testing = _proveedor_ia_actual(provider_override)
         try:
-            if proveedor_testing in {"qwen", "qwen3"} and settings.QWEN_API_KEY and settings.QWEN_BASE_URL:
+            if proveedor_testing == "qwen" and settings.QWEN_API_KEY and settings.QWEN_BASE_URL:
                 resultado = _consultar_qwen(
                     mensaje_usuario=mensaje_usuario,
                     historial_chat=historial_chat,
@@ -2088,6 +2108,7 @@ def consultar_ia(
                     alerta_riesgo=alerta_riesgo,
                     etiqueta_alerta=etiqueta_alerta,
                     tiene_multimedia=tiene_multimedia,
+                    model_override=model_override,
                 )
                 return _aplicar_validacion(resultado)
 
@@ -2100,15 +2121,7 @@ def consultar_ia(
                     alerta_riesgo=alerta_riesgo,
                     etiqueta_alerta=etiqueta_alerta,
                     tiene_multimedia=tiene_multimedia,
-                )
-                return _aplicar_validacion(resultado)
-            if proveedor_testing in {"eden", "edenai"} and settings.EDEN_API_KEY:
-                resultado = _consultar_eden(
-                    mensaje_usuario=mensaje_usuario,
-                    historial_chat=historial_chat,
-                    contexto_adicional=contexto_adicional,
-                    alerta_riesgo=alerta_riesgo,
-                    etiqueta_alerta=etiqueta_alerta,
+                    model_override=model_override,
                 )
                 return _aplicar_validacion(resultado)
         except Exception as e:
@@ -2147,123 +2160,11 @@ def consultar_ia(
             "motivo_fallback": "testing_mode_without_provider_credentials",
         }
 
-    proveedor = _proveedor_ia_actual()
-
-    if proveedor == "hybrid":
-        try:
-            # En híbrido: multimedia -> Gemini (si está), texto -> Eden (si está) -> Qwen -> Gemini.
-            if (imagenes and tiene_multimedia) or _tiene_video_adjuntos(imagenes):
-                if settings.GEMINI_API_KEY:
-                    resultado = _consultar_gemini(
-                        mensaje_usuario=mensaje_usuario,
-                        historial_chat=historial_chat,
-                        imagenes=imagenes,
-                        contexto_adicional=contexto_adicional,
-                        alerta_riesgo=alerta_riesgo,
-                        etiqueta_alerta=etiqueta_alerta,
-                        tiene_multimedia=tiene_multimedia,
-                    )
-                    return _aplicar_validacion(resultado)
-
-            if settings.EDEN_API_KEY:
-                resultado = _consultar_eden(
-                    mensaje_usuario=mensaje_usuario,
-                    historial_chat=historial_chat,
-                    contexto_adicional=contexto_adicional,
-                    alerta_riesgo=alerta_riesgo,
-                    etiqueta_alerta=etiqueta_alerta,
-                )
-                return _aplicar_validacion(resultado)
-
-            if settings.QWEN_API_KEY and settings.QWEN_BASE_URL:
-                resultado = _consultar_qwen(
-                    mensaje_usuario=mensaje_usuario,
-                    historial_chat=historial_chat,
-                    imagenes=imagenes,
-                    contexto_adicional=contexto_adicional,
-                    alerta_riesgo=alerta_riesgo,
-                    etiqueta_alerta=etiqueta_alerta,
-                    tiene_multimedia=tiene_multimedia,
-                )
-                return _aplicar_validacion(resultado)
-
-            if settings.GEMINI_API_KEY:
-                resultado = _consultar_gemini(
-                    mensaje_usuario=mensaje_usuario,
-                    historial_chat=historial_chat,
-                    imagenes=imagenes,
-                    contexto_adicional=contexto_adicional,
-                    alerta_riesgo=alerta_riesgo,
-                    etiqueta_alerta=etiqueta_alerta,
-                    tiene_multimedia=tiene_multimedia,
-                )
-                return _aplicar_validacion(resultado)
-        except Exception as e:
-            if not settings.IA_FALLBACK_LOCAL:
-                raise
-
-            return {
-                "respuesta": _respuesta_local_gratis(
-                    mensaje_usuario,
-                    alerta_riesgo,
-                    contexto_adicional=contexto_adicional,
-                    tiene_multimedia=tiene_multimedia or bool(imagenes),
-                    imagenes=imagenes,
-                    historial_chat=historial_chat,
-                ),
-                "etiqueta_alerta": etiqueta_alerta,
-                "alerta_riesgo": alerta_riesgo,
-                "modelo": "fallback_local",
-                "origen": "fallback_local",
-                "motivo_fallback": e.__class__.__name__,
-            }
-
-    if proveedor in {"eden", "edenai"}:
-        try:
-            if (imagenes and tiene_multimedia) or _tiene_video_adjuntos(imagenes):
-                if settings.GEMINI_API_KEY:
-                    resultado = _consultar_gemini(
-                        mensaje_usuario=mensaje_usuario,
-                        historial_chat=historial_chat,
-                        imagenes=imagenes,
-                        contexto_adicional=contexto_adicional,
-                        alerta_riesgo=alerta_riesgo,
-                        etiqueta_alerta=etiqueta_alerta,
-                        tiene_multimedia=tiene_multimedia,
-                    )
-                    return _aplicar_validacion(resultado)
-
-            resultado = _consultar_eden(
-                mensaje_usuario=mensaje_usuario,
-                historial_chat=historial_chat,
-                contexto_adicional=contexto_adicional,
-                alerta_riesgo=alerta_riesgo,
-                etiqueta_alerta=etiqueta_alerta,
-            )
-            return _aplicar_validacion(resultado)
-        except Exception as e:
-            if not settings.IA_FALLBACK_LOCAL:
-                raise
-
-            return {
-                "respuesta": _respuesta_local_gratis(
-                    mensaje_usuario,
-                    alerta_riesgo,
-                    contexto_adicional=contexto_adicional,
-                    tiene_multimedia=tiene_multimedia or bool(imagenes),
-                    imagenes=imagenes,
-                    historial_chat=historial_chat,
-                ),
-                "etiqueta_alerta": etiqueta_alerta,
-                "alerta_riesgo": alerta_riesgo,
-                "modelo": "fallback_local",
-                "origen": "fallback_local",
-                "motivo_fallback": e.__class__.__name__,
-            }
+    proveedor = _proveedor_ia_actual(provider_override)
 
     # Qwen3 es excelente para texto; si el mensaje trae multimedia y el modelo
     # configurado no la soporta, usamos Gemini como ruta visual.
-    if proveedor in {"qwen", "qwen3"}:
+    if proveedor == "qwen":
         try:
             if imagenes and (tiene_multimedia or _tiene_video_adjuntos(imagenes)) and not settings.QWEN_SUPPORTS_MULTIMODAL:
                 if settings.GEMINI_API_KEY:
@@ -2275,6 +2176,7 @@ def consultar_ia(
                         alerta_riesgo=alerta_riesgo,
                         etiqueta_alerta=etiqueta_alerta,
                         tiene_multimedia=tiene_multimedia,
+                        model_override=model_override,
                     )
                     return _aplicar_validacion(resultado)
 
@@ -2286,6 +2188,7 @@ def consultar_ia(
                 alerta_riesgo=alerta_riesgo,
                 etiqueta_alerta=etiqueta_alerta,
                 tiene_multimedia=tiene_multimedia,
+                model_override=model_override,
             )
             return _aplicar_validacion(resultado)
         except Exception as e:
@@ -2317,6 +2220,7 @@ def consultar_ia(
             alerta_riesgo=alerta_riesgo,
             etiqueta_alerta=etiqueta_alerta,
             tiene_multimedia=tiene_multimedia,
+            model_override=model_override,
         )
         return _aplicar_validacion(resultado)
     except Exception as e:

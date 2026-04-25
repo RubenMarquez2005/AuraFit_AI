@@ -76,6 +76,9 @@ HABITOS_BASE = [
     {"titulo": "Comida 5", "subtitulo": "Cena ligera y saciante", "franja": "Noche", "color_hex": "#C084FC", "orden": 4},
     {"titulo": "Movimiento 20 min", "subtitulo": "Caminar o entrenar según energía", "franja": "Tarde", "color_hex": "#16A34A", "orden": 5},
     {"titulo": "Check-in emocional", "subtitulo": "Registrar ánimo, energía y estrés", "franja": "Noche", "color_hex": "#0EA5E9", "orden": 6},
+    {"titulo": "Respiración 4-6", "subtitulo": "Regular eje HPA y reducir reactividad", "franja": "Noche", "color_hex": "#0891B2", "orden": 7},
+    {"titulo": "Fuerza técnica", "subtitulo": "Bloque corto de 2-3 ejercicios sin impacto", "franja": "Tarde", "color_hex": "#15803D", "orden": 8},
+    {"titulo": "Hidratación estructurada", "subtitulo": "2-2.5L agua con control de sodio diario", "franja": "Mañana", "color_hex": "#7C3AED", "orden": 9},
 ]
 TRASTORNOS_CLINICOS = {
     "tca",
@@ -1109,6 +1112,14 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Fotos o videos codificados en base64 para análisis multimodal",
     )
+    provider: Optional[str] = Field(
+        default=None,
+        description="Proveedor opcional por solicitud: gemini o qwen",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="Modelo opcional por solicitud para el proveedor seleccionado",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -1140,7 +1151,7 @@ class ChatResponse(BaseModel):
 class ChatProviderUpdateRequest(BaseModel):
     """Payload para actualizar proveedor IA en caliente."""
 
-    provider: str = Field(..., description="gemini, eden, qwen o hybrid")
+    provider: str = Field(..., description="gemini o qwen")
 
 
 class ChatProviderResponse(BaseModel):
@@ -1148,7 +1159,7 @@ class ChatProviderResponse(BaseModel):
 
     ok: bool
     provider: str
-    supported_providers: List[str] = Field(default_factory=lambda: ["gemini", "eden", "qwen", "hybrid"])
+    supported_providers: List[str] = Field(default_factory=lambda: ["gemini", "qwen"])
 
 
 _RASA_RESPUESTAS_GENERICAS = (
@@ -2767,6 +2778,25 @@ class MedicacionResponse(BaseModel):
     fecha_actualizacion: str
 
 
+class NotaClinicaCreateRequest(BaseModel):
+    """Nota clínica redactada por especialista para seguimiento del paciente."""
+
+    titulo: str = Field(..., min_length=3, max_length=120)
+    contenido: str = Field(..., min_length=10, max_length=6000)
+
+
+class NotaClinicaResponse(BaseModel):
+    """Nota clínica visible en panel profesional e informe PDF."""
+
+    id: int
+    paciente_id: int
+    profesional_id: int
+    profesional_nombre: str
+    titulo: str
+    contenido: str
+    fecha_creacion: str
+
+
 class MedicamentoCatalogoResponse(BaseModel):
     """Elemento del catálogo farmacológico para apoyo en prescripción médica."""
 
@@ -3909,6 +3939,37 @@ def _serializar_medicacion(medicacion: MedicacionAsignada) -> MedicacionResponse
     )
 
 
+def _extraer_titulo_nota_clinica(texto: str) -> str:
+    """Extrae título de nota clínica persistida en formato [NOTA_CLINICA] Título\ncontenido."""
+    raw = (texto or "").strip()
+    if not raw.startswith("[NOTA_CLINICA]"):
+        return "Nota clínica"
+    linea = raw.splitlines()[0]
+    titulo = linea.replace("[NOTA_CLINICA]", "").strip()
+    return titulo or "Nota clínica"
+
+
+def _extraer_cuerpo_nota_clinica(texto: str) -> str:
+    """Extrae el cuerpo de la nota clínica desde el mensaje persistido."""
+    raw = (texto or "").strip()
+    if "\n" not in raw:
+        return ""
+    return raw.split("\n", 1)[1].strip()
+
+
+def _serializar_nota_clinica(mensaje: MensajeChat, paciente_id: int) -> NotaClinicaResponse:
+    """Convierte mensaje de tipo profesional en nota clínica estructurada."""
+    return NotaClinicaResponse(
+        id=mensaje.id,
+        paciente_id=paciente_id,
+        profesional_id=mensaje.usuario_id,
+        profesional_nombre=(mensaje.usuario.nombre if mensaje.usuario is not None else f"Profesional {mensaje.usuario_id}"),
+        titulo=_extraer_titulo_nota_clinica(mensaje.texto),
+        contenido=_extraer_cuerpo_nota_clinica(mensaje.texto),
+        fecha_creacion=mensaje.fecha_creacion.isoformat(),
+    )
+
+
 def _serializar_plan_nutricional(plan: PlanNutricionalClinico) -> PlanNutricionalResponse:
     """Convierte plan nutricional persistido para panel clínico."""
     return PlanNutricionalResponse(
@@ -4049,13 +4110,19 @@ def _sugerir_severidad_desde_kpis(kpis: PacienteKpisResponse) -> SeveridadSugeri
 
 def _serializar_recurso_clinico(item: RecursoClinico) -> RecursoClinicoResponse:
     """Convierte recurso clínico de repositorio hospitalario."""
+    url = (item.url or "").strip()
+    if not url:
+        # Fallback estable para evitar tarjetas vacías en recursos.
+        query = quote_plus(f"{item.trastorno} {item.especialidad} guia clinica")
+        url = f"https://www.google.com/search?q={query}"
+
     return RecursoClinicoResponse(
         id=item.id,
         trastorno=item.trastorno,
         especialidad=item.especialidad,
         titulo=item.titulo,
         descripcion=item.descripcion,
-        url=item.url,
+        url=url,
         nivel_evidencia=item.nivel_evidencia,
         activo=bool(item.activo),
         fecha_actualizacion=item.fecha_actualizacion.isoformat(),
@@ -4601,9 +4668,9 @@ def get_chat_provider(
         )
 
     provider = (settings.IA_PROVIDER or "gemini").strip().lower()
-    aliases = {"qwen3": "qwen", "edenai": "eden"}
+    aliases = {"qwen3": "qwen"}
     provider = aliases.get(provider, provider)
-    if provider not in {"gemini", "eden", "qwen", "hybrid"}:
+    if provider not in {"gemini", "qwen"}:
         provider = "gemini"
 
     return ChatProviderResponse(ok=True, provider=provider)
@@ -4623,12 +4690,12 @@ def set_chat_provider(
         )
 
     provider = (payload.provider or "").strip().lower()
-    aliases = {"qwen3": "qwen", "edenai": "eden"}
+    aliases = {"qwen3": "qwen"}
     provider = aliases.get(provider, provider)
-    if provider not in {"gemini", "eden", "qwen", "hybrid"}:
+    if provider not in {"gemini", "qwen"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="provider debe ser: gemini, eden, qwen o hybrid",
+            detail="provider debe ser: gemini o qwen",
         )
 
     settings.IA_PROVIDER = provider
@@ -4711,7 +4778,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     except Exception:
         logger.exception("Error al intentar respuesta con RASA")
 
-    # 2) Fallback principal a IA (Gemini/Eden/Qwen/local), incluyendo multimedia.
+    # 2) Fallback principal a IA (Gemini/Qwen/local), incluyendo multimedia.
     if not respuesta_ia:
         try:
             resultado_ia = consultar_ia(
@@ -4720,6 +4787,8 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
                 imagenes=adjuntos_normalizados,
                 contexto_adicional=contexto_ia,
                 tiene_multimedia=tiene_multimedia,
+                provider_override=(payload.provider or "").strip().lower() or None,
+                model_override=(payload.model or "").strip() or None,
             )
             respuesta_ia = str(resultado_ia.get("respuesta") or "").strip()
             motor_respuesta = str(
@@ -5290,17 +5359,70 @@ def descargar_informe_pdf(
         .all()
     )
 
-    # Consejos de IA recientes (limpios y sin duplicados).
+    # Consejos de IA recientes (filtrando frases de fallback y ruido genérico).
+    bloqueados = (
+        "incidencia temporal",
+        "he recibido tu mensaje",
+        "puedo ayudarte",
+        "en este momento",
+    )
     consejos: List[str] = []
     vistos = set()
     for r in registros:
-        if r.analisis_nutricional_ia:
-            txt = r.analisis_nutricional_ia.strip()
-            if txt and txt not in vistos:
-                consejos.append(txt)
-                vistos.add(txt)
-        if len(consejos) >= 5:
+        if not r.analisis_nutricional_ia:
+            continue
+        txt = r.analisis_nutricional_ia.strip().replace("\n", " ")
+        if not txt:
+            continue
+        txt_norm = txt.lower()
+        if any(k in txt_norm for k in bloqueados):
+            continue
+        if txt in vistos:
+            continue
+        consejos.append(txt)
+        vistos.add(txt)
+        if len(consejos) >= 6:
             break
+
+    kpis = _calcular_kpis_paciente(db, usuario_id)
+    plan_nutri = (
+        db.query(PlanNutricionalClinico)
+        .filter(PlanNutricionalClinico.paciente_id == usuario_id)
+        .filter(PlanNutricionalClinico.activo == True)
+        .order_by(PlanNutricionalClinico.fecha_actualizacion.desc(), PlanNutricionalClinico.id.desc())
+        .first()
+    )
+    meds_activas = (
+        db.query(MedicacionAsignada)
+        .filter(MedicacionAsignada.paciente_id == usuario_id)
+        .filter(MedicacionAsignada.activa == True)
+        .order_by(MedicacionAsignada.fecha_actualizacion.desc(), MedicacionAsignada.id.desc())
+        .limit(8)
+        .all()
+    )
+    derivaciones_abiertas = (
+        db.query(Derivacion)
+        .filter(Derivacion.paciente_id == usuario_id)
+        .filter(Derivacion.estado.in_(["pendiente", "aceptada", "en_seguimiento"]))
+        .order_by(Derivacion.fecha_creacion.desc(), Derivacion.id.desc())
+        .limit(8)
+        .all()
+    )
+    notas_clinicas = (
+        db.query(MensajeChat)
+        .filter(MensajeChat.usuario_id == usuario_id)
+        .filter(MensajeChat.emisor == "profesional")
+        .filter(MensajeChat.texto.like("[NOTA_CLINICA]%"))
+        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+        .limit(6)
+        .all()
+    )
+
+    def _linea_clinica(txt: str, max_chars: int = 140) -> str:
+        limpio = (txt or "").replace("\n", " ").strip()
+        if len(limpio) <= max_chars:
+            return limpio
+        return limpio[: max_chars - 3].rstrip() + "..."
 
     historial_imc = _extraer_imcs_desde_notas(registros)
     if not historial_imc and perfil and perfil.imc_actual:
@@ -5330,18 +5452,31 @@ def descargar_informe_pdf(
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "Resumen de perfil", ln=True)
+    pdf.cell(0, 8, "1) Resumen de perfil y diagnostico metabolico", ln=True)
     pdf.set_font("Helvetica", "", 11)
     if perfil:
         pdf.cell(0, 7, f"Peso actual: {float(perfil.peso_actual) if perfil.peso_actual else 'N/D'} kg", ln=True)
         pdf.cell(0, 7, f"Altura: {perfil.altura if perfil.altura else 'N/D'} cm", ln=True)
         pdf.cell(0, 7, f"IMC actual: {float(perfil.imc_actual) if perfil.imc_actual else 'N/D'}", ln=True)
+        if perfil.imc_actual is not None:
+            imc_val = float(perfil.imc_actual)
+            if imc_val >= 30:
+                diagnostico = "IMC elevado: priorizar bajo impacto articular y déficit moderado con proteína alta."
+            elif imc_val < 18.5:
+                diagnostico = "IMC bajo: priorizar ganancia de masa magra y estabilidad energética."
+            else:
+                diagnostico = "IMC en rango intermedio: foco en recomposición y adherencia técnica."
+            pdf.multi_cell(0, 7, f"Diagnóstico metabólico: {diagnostico}")
     else:
         pdf.cell(0, 7, "Sin perfil de salud registrado", ln=True)
 
+    pdf.cell(0, 7, f"Riesgo emocional 7d: {kpis.riesgo_emocional}", ln=True)
+    pdf.cell(0, 7, f"Adherencia nutricional 7d: {kpis.adherencia_nutricional_pct if kpis.adherencia_nutricional_pct is not None else 'N/D'}%", ln=True)
+    pdf.cell(0, 7, f"Adherencia hábitos 7d: {kpis.adherencia_habitos_pct if kpis.adherencia_habitos_pct is not None else 'N/D'}%", ln=True)
+
     pdf.ln(3)
     pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "Evolucion del IMC", ln=True)
+    pdf.cell(0, 8, "2) Evolucion del IMC", ln=True)
     pdf.set_font("Helvetica", "", 11)
     if historial_imc:
         for p in sorted(historial_imc, key=lambda x: x["fecha"])[-10:]:
@@ -5351,15 +5486,66 @@ def descargar_informe_pdf(
 
     pdf.ln(3)
     pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "Resumen de consejos de la IA", ln=True)
+    pdf.cell(0, 8, "3) Plan nutricional clinico activo", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    if plan_nutri is not None:
+        pdf.cell(0, 7, f"Kcal objetivo: {int(plan_nutri.calorias_objetivo)} kcal", ln=True)
+        pdf.cell(0, 7, f"Macros: P {int(plan_nutri.proteinas_g)}g | C {int(plan_nutri.carbohidratos_g)}g | G {int(plan_nutri.grasas_g)}g", ln=True)
+        pdf.cell(0, 7, f"Objetivo: {plan_nutri.objetivo_clinico} | Riesgo metabólico: {plan_nutri.riesgo_metabolico}", ln=True)
+        if plan_nutri.observaciones:
+            pdf.multi_cell(0, 6, f"Observaciones: {_linea_clinica(plan_nutri.observaciones, 300)}")
+    else:
+        pdf.cell(0, 7, "No hay plan nutricional clínico activo", ln=True)
+
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "4) Medicacion activa", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    if meds_activas:
+        for med in meds_activas:
+            pdf.multi_cell(
+                0,
+                6,
+                f"- {med.medicamento} | {med.dosis} | {med.frecuencia}"
+                + (f" | {_linea_clinica(med.instrucciones, 120)}" if med.instrucciones else ""),
+            )
+    else:
+        pdf.cell(0, 7, "Sin medicación activa registrada", ln=True)
+
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "5) Derivaciones y coordinacion", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    if derivaciones_abiertas:
+        for d in derivaciones_abiertas:
+            destino = (d.especialidad_destino or "especialidad").strip()
+            pdf.multi_cell(0, 6, f"- {destino.upper()} [{d.estado}] | {_linea_clinica(d.motivo, 150)}")
+    else:
+        pdf.cell(0, 7, "No hay derivaciones abiertas en este periodo", ln=True)
+
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "6) Notas clínicas del especialista", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    if notas_clinicas:
+        for n in notas_clinicas:
+            titulo = _extraer_titulo_nota_clinica(n.texto)
+            cuerpo = _extraer_cuerpo_nota_clinica(n.texto)
+            fecha = n.fecha_creacion.date().isoformat() if n.fecha_creacion else "N/D"
+            pdf.multi_cell(0, 6, f"- [{fecha}] {titulo}: {_linea_clinica(cuerpo, 220)}")
+    else:
+        pdf.cell(0, 7, "No hay notas clínicas recientes", ln=True)
+
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "7) Resumen de consejos de IA (curado)", ln=True)
     pdf.set_font("Helvetica", "", 11)
     if consejos:
         for idx, consejo in enumerate(consejos, start=1):
-            texto = consejo.replace("\n", " ")[:320]
-            pdf.multi_cell(0, 6, f"{idx}. {texto}")
+            pdf.multi_cell(0, 6, f"{idx}. {_linea_clinica(consejo, 320)}")
             pdf.ln(1)
     else:
-        pdf.cell(0, 7, "No hay consejos registrados para este periodo", ln=True)
+        pdf.cell(0, 7, "No hay recomendaciones IA clínicas válidas en este periodo", ln=True)
 
     pdf_bytes = bytes(pdf.output(dest="S"))
     filename = f"informe_mensual_usuario_{usuario_id}.pdf"
@@ -5575,6 +5761,88 @@ def actualizar_estado_medicacion(
     db.commit()
     db.refresh(med)
     return _serializar_medicacion(med)
+
+
+@app.get(
+    "/profesionales/pacientes/{paciente_id}/notas-clinicas",
+    response_model=List[NotaClinicaResponse],
+)
+def listar_notas_clinicas_paciente(
+    paciente_id: int,
+    limit: int = Query(default=30, ge=1, le=200),
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[NotaClinicaResponse]:
+    """Lista notas clínicas escritas por especialistas para el paciente."""
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo profesionales pueden consultar notas clínicas",
+        )
+
+    paciente = db.query(Usuario).filter(Usuario.id == paciente_id).first()
+    if not paciente:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado")
+    rol_paciente = (paciente.rol.nombre if paciente.rol else "").strip().lower()
+    if rol_paciente != "cliente":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El usuario indicado no es un paciente",
+        )
+
+    notas = (
+        db.query(MensajeChat)
+        .filter(MensajeChat.usuario_id == paciente_id)
+        .filter(MensajeChat.emisor == "profesional")
+        .filter(MensajeChat.texto.like("[NOTA_CLINICA]%"))
+        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_serializar_nota_clinica(n, paciente_id) for n in notas]
+
+
+@app.post(
+    "/profesionales/pacientes/{paciente_id}/notas-clinicas",
+    response_model=NotaClinicaResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def crear_nota_clinica_paciente(
+    paciente_id: int,
+    payload: NotaClinicaCreateRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> NotaClinicaResponse:
+    """Permite al especialista registrar una nota clínica estructurada en el historial del paciente."""
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo profesionales pueden registrar notas clínicas",
+        )
+
+    paciente = db.query(Usuario).filter(Usuario.id == paciente_id).first()
+    if not paciente:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado")
+    rol_paciente = (paciente.rol.nombre if paciente.rol else "").strip().lower()
+    if rol_paciente != "cliente":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El usuario indicado no es un paciente",
+        )
+
+    titulo = payload.titulo.strip()
+    contenido = payload.contenido.strip()
+    texto = f"[NOTA_CLINICA] {titulo}\n{contenido}"
+
+    nota = MensajeChat(
+        usuario_id=paciente_id,
+        emisor="profesional",
+        texto=texto,
+    )
+    db.add(nota)
+    db.commit()
+    db.refresh(nota)
+    return _serializar_nota_clinica(nota, paciente_id)
 
 
 @app.get(
