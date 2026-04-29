@@ -17,6 +17,7 @@ from app.models.database import (
 	ChecklistClinicoPaciente,
 	ChecklistClinicoHistorial,
 	RecursoClinico,
+	PlanIA,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
 	"ChecklistClinicoPaciente",
 	"ChecklistClinicoHistorial",
 	"RecursoClinico",
+	"PlanIA",
 ]

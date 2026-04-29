@@ -66,6 +66,7 @@ def _calcular_estadisticas_7dias(db: Session, usuario_id: int) -> Dict[str, Any]
     promedio_animo = round(sum(animos) / len(animos), 1) if animos else 5.0
     promedio_energia = round(sum(energias) / len(energias), 1) if energias else 5.0
     promedio_estres = round(sum(estreses) / len(estreses), 1) if estreses else 5.0
+    promedio_calma = round(max(0.0, min(10.0, 10 - promedio_estres)), 1)
     promedio_sueno = round(sum(suenos) / len(suenos), 1) if suenos else 7.0
 
     # Tendencias (comparar primeros 3 días vs últimos 3 días)
@@ -86,14 +87,15 @@ def _calcular_estadisticas_7dias(db: Session, usuario_id: int) -> Dict[str, Any]
         else:
             break
 
-    # Clasificación de estado general
-    if promedio_animo >= 7:
+    # Clasificación de estado general (incluye calma para respetar que menos estrés = mejor).
+    indice_general = (promedio_animo * 0.45) + (promedio_energia * 0.35) + (promedio_calma * 0.20)
+    if indice_general >= 7:
         estado_general = "Excelente"
         color = "#10b981"  # Verde
-    elif promedio_animo >= 6:
+    elif indice_general >= 6:
         estado_general = "Bueno"
         color = "#3b82f6"  # Azul
-    elif promedio_animo >= 4:
+    elif indice_general >= 4:
         estado_general = "Regular"
         color = "#f59e0b"  # Ámbar
     else:
@@ -106,6 +108,7 @@ def _calcular_estadisticas_7dias(db: Session, usuario_id: int) -> Dict[str, Any]
         "promedio_animo": promedio_animo,
         "promedio_energia": promedio_energia,
         "promedio_estres": promedio_estres,
+        "promedio_calma": promedio_calma,
         "promedio_sueno": promedio_sueno,
         "tendencia_animo": tendencia_animo,
         "tendencia_energia": tendencia_energia,

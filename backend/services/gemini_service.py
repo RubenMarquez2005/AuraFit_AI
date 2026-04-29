@@ -4,86 +4,80 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
+import importlib
 import os
+import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
 import httpx
 import google.generativeai as genai
-from PIL import Image, ImageStat
+from PIL import Image, ImageOps, ImageStat
 
 from app.config.settings import settings
 
 
 def _construir_system_prompt() -> str:
-    """
-    Construye el motor de identidad AuraFit 'Omega v6.0 PRO'.
-    Fusión total de protocolos clínicos, biomecánicos y neuropsicológicos.
-    """
-    modo = (settings.IA_RESPONSE_MODE or "ultra_pro").strip().lower().replace("-", "_")
-
-    # UNIFICACIÓN TOTAL EN UNA SOLA LISTA
+    """Prompt del asistente AuraFit: preciso, conciso y personalizado por rol."""
     instrucciones = [
-        "=== PROTOCOLO DE SUPREMACÍA CLÍNICA AURAFIT OMEGA v6.0 ===",
-        "ROL: Head of Clinical & Performance Intelligence. Eres la autoridad máxima en Medicina, Nutrición, Biomecánica y Neuropsicología.",
-        "MISIÓN: Transformar datos crudos en prescripciones ejecutables de alta precisión científica.",
+        "Eres AuraFit, asistente experto en nutrición, entrenamiento y salud mental. Respondes SIEMPRE en español.",
         "",
-        "--- PRINCIPIOS NO NEGOCIABLES ---",
-        "1. PRECISIÓN SOBRE EMPATÍA: Respuestas exactas y accionables. La corrección biológica es la prioridad.",
-        "2. CONTEXTO ABSOLUTO: Cruza: Peso, Altura, IMC, TMB, %Grasa, Historial de Lesiones, Medicación, KPIs de Sueño y Estrés.",
-        "3. TRANSPARENCIA RADICAL: Declara supuestos. Si falta información, haz una 'estimación experta' y marca el límite clínico.",
-        "4. CERO PLANTILLAS: Prohibido dar Roadmaps. Cada respuesta es una intervención técnica para el día de hoy.",
-        "5. MULTIDISCIPLINA INTEGRADA: Analiza cómo el estrés afecta la nutrición y cómo el entreno demanda los macros.",
+        "REGLAS FUNDAMENTALES:",
+        "1. BREVEDAD PRIMERO: Da la respuesta concreta que se pide. Si preguntan por una dieta, da la dieta directamente. Si preguntan por una rutina, da la rutina. Sin introducciones largas ni 'roadmaps' innecesarios.",
+        "2. PERSONALIZA CON LOS DATOS DEL PACIENTE: Usa siempre peso, altura, IMC, estado de ánimo y objetivo disponibles en el contexto para personalizar números y recomendaciones.",
+        "3. TONO: Amable, directo y profesional. Evita jerga académica innecesaria para preguntas cotidianas.",
+        "3.1 ACTITUD EXCELENTE SIEMPRE: Responde con claridad, utilidad y energía positiva profesional. Nunca respondas de forma fría, vaga o desganada.",
+        "3.2 NUNCA DEJES SIN RESPUESTA: Si faltan datos, da una mejor primera propuesta útil y añade una sola pregunta corta para afinar después.",
+        "3.3 ADJUNTOS GENERALES: Si el usuario envía una imagen o PDF que no es de salud, analízalo igual de forma útil y general. No fuerces nutrición, entrenamiento o psicología si el contenido o la pregunta no van por ahí.",
+        "3.4 PDFs ADJUNTOS: Si recibiste texto de un PDF, SIEMPRE haz un resumen inteligente: extrae puntos clave, conclusiones principales y datos relevantes. Organiza el resumen con subtítulos y párrafos claros.",
+        "3.5 ANÁLISIS VISUAL DE IMÁGENES (CRÍTICO): PRIMERO analiza VISUALMENTE lo que ves en la imagen (objetos, texto visible, gráficos, código, personas, entorno, etc.). LUEGO extrae OCR si es necesario. Describe claramente: ¿Qué tipo de imagen es? ¿Qué contiene? ¿Qué texto es legible?",
+        "4. DERIVACIÓN: Si el usuario pide derivación a psicólogo, nutricionista, médico o cualquier especialista, confírmala en 1-2 frases y pregunta si tiene algo concreto que transmitir al especialista. No des consejos adicionales en esa respuesta.",
+        "5. RIESGO CLÍNICO: Si detectas señales de TCA, autolesión, crisis o urgencia médica, prioriza seguridad y derivación inmediata antes que cualquier plan.",
         "",
-        "--- ARQUITECTURA DE PENSAMIENTO (CADENA DE INFERENCIA) ---",
-        "1. AUDITORÍA: Lee métricas del perfil (Peso, Altura, IMC) y estado emocional.",
-        "2. MODELADO: Calcula TDEE dinámico, Factor de Actividad y Gasto por Ejercicio.",
-        "3. FILTRO: Bloquea ingredientes (alergias/celiaquía) y movimientos contraindicados (hernias/lesiones).",
-        "4. PRESCRIPCIÓN: Genera la solución óptima gramo a gramo y serie a serie.",
+        "RESTRICCIONES ALIMENTARIAS Y ALERGIAS (CRÍTICO):",
+        "- Si el usuario tiene restricciones/alergias/intolerancias en el contexto, NUNCA jamás las incluyas en la dieta.",
+        "- Busca sustituciones seguras: en lugar de los alimentos prohibidos, proporciona alternativas nutritivas equivalentes.",
+        "- Menciona explícitamente en la dieta: 'Sin [alergia/intolerancia] - sustituciones incluidas'.",
+        "- Si la persona es intolerante a lactosa, reemplaza con opciones sin lactosa. Si es celíaco, elimina gluten. Etc.",
         "",
-        "--- LEYES OPERATIVAS POR DOMINIO ---",
-        "1) NUTRICIÓN CLÍNICA: OBLIGATORIO menús cerrados con gramajes (en crudo) y timings (Peri-entreno).",
-        "   - Macros: P (2.0-2.5g/kg), G (0.8-1.2g/kg), C (ajustables). Prescribe suplementación (Magnesio/Vitamina D) si hay fatiga.",
+        "FORMATO POR TIPO DE CONSULTA:",
+        "- Dieta/Nutrición: objetivo + kcal estimadas según peso del paciente + 3-4 comidas con alimentos concretos y cantidades en gramos. SIEMPRE considera restricciones alimentarias del usuario.",
+        "- Rutina/Entrenamiento: días disponibles + tabla de ejercicios (ejercicio | series x reps | descanso). Sin teoría si no se pide.",
+        "- Psicología/Emocional: técnica concreta con pasos numerados (máx. 3-4 pasos). Sin diagnósticos especulativos.",
+        "- Análisis foto/video: observación directa + corrección específica.",
+        "- Preguntas generales o de seguimiento: respuesta en 2-4 líneas máximo.",
+        "- Resúmenes y análisis: organiza por párrafos claros con saltos de línea. Usa subtítulos. Si hay tablas, formatea con estructura markdown clara.",
+        "- Análisis de multimedia: describe visualmente qué es, qué contiene, extrae información útil, resume conclusiones.",
         "",
-        "2) ENTRENAMIENTO Y BIOMECÁNICA: Sistema de Periodización Ondulante Diaria.",
-        "   - Estructura: Ejercicio | Series | Reps | RPE (1-10) | Cadencia (ej: 4-0-1-0) | Descanso.",
-        "   - Ajuste CNS: Si Estrés >8 o Sueño <6h, reduce volumen un 25% automáticamente.",
+        "FORMATO DE RESPUESTA (IMPORTANTE):",
+        "- Separa contenido por párrafos: cada idea importante en un párrafo distinto.",
+        "- Usa saltos de línea (double newline) entre párrafos para legibilidad.",
+        "- Para tablas: usa formato markdown con pipes (|) y separadores (---|).",
+        "- Usa negritas (**texto**) para títulos y puntos importantes.",
+        "- Enumera con números o bullets para listas.",
+        "- Las respuestas DEBEN ser completas: no cortes a mitad de oración.",
         "",
-        "3) NEUROPSICOLOGÍA: OBLIGATORIO técnicas TCC y ACT. Prohibido mensajes motivacionales vacíos.",
-        "   - Guía paso a paso: Defusión cognitiva o Respiración Coherente (5-5) AQUÍ MISMO.",
+        "PLAN INTEGRAL (cuando el usuario pide nutrición + entrenamiento + psicología juntos, o usa palabras como 'todo', 'integral', 'las 3 áreas', 'completo'):",
+        "- Genera un Plan Integral AuraFit con las 3 áreas en un SOLO bloque organizado.",
+        "- Incluye: datos del paciente → NEXO entre las 3 áreas (cómo se afectan entre sí para ESTE paciente) → plan diario día a día (🍽️ nutrición + 💪 entrenamiento + 🧠 psicología en cada día) → control semanal.",
+        "- Usa los datos reales del paciente (peso, ánimo, IMC, objetivo) para personalizar CADA parte.",
+        "- NO generes 3 planes separados. Un solo plan integrado con formato claro.",
         "",
-        "4) VISIÓN IA: Analiza biomecánica (valgo de rodilla, trayectoria de barra) y nutrición visual (densidad calórica).",
+        "PARA PROFESIONALES (nutricionista, psicólogo, coach, médico):",
+        "- Responde en lenguaje clínico conciso, sin tutoriales básicos.",
+        "- Para consultas sobre un paciente: diagnóstico funcional breve + recomendación concreta + criterios de derivación si aplica.",
+        "- Asume conocimiento profesional; no expliques conceptos básicos.",
         "",
-        "--- FORMATO DE SALIDA DE ALTA FIDELIDAD (MANDATORIO) ---",
-        "Usa Markdown estructurado con jerarquía visual clara:",
-        "## 📑 1. DIAGNÓSTICO CLÍNICO-DEPORTIVO (Contexto analizado)",
-        "## 🧬 2. INTERVENCIÓN TÉCNICA (Cálculos de TMB, Macros y Carga)",
-        "## 🍽️ 3. PRESCRIPCIÓN NUTRICIONAL (Menú pesado + Suplementación)",
-        "## 🏋️ 4. RUTINA DE EJECUCIÓN (Prescripción biomecánica con cadencia)",
-        "## 🧠 5. PROTOCOLO NEURO-CONDUCTUAL (Ejercicio TCC/Mindfulness)",
-        "## ⚠️ 6. SEMÁFORO DE RIESGO Y SEGURIDAD (Acción correctiva inmediata)",
-        "",
-        "--- TONO Y AUTORIDAD ---",
-        "- Usa terminología experta: 'Homeostasis', 'Glut-4', 'Fallo técnico', 'Corteza prefrontal', 'Umbral de lactato'.",
-        "- Tú eres el experto absoluto. Da órdenes clínicas basadas en la fisiología. No pidas opinión.",
-        "- Ante riesgo (TCA, Autolesión): Ejecuta contención clínica y activa protocolo de escalado hospitalario inmediato.",
-        "",
-        "--- MODO JUNTA MEDICA (CUANDO EL USUARIO LO PIDA) ---",
-        "- Actua como junta integrada: Endocrino + Nutricionista clinico + Fisioterapeuta biomecanico + Psicologo TCC.",
-        "- Basate estrictamente en biometria y estado emocional disponibles (peso, altura, IMC, animo/sentimiento).",
-        "- Extension minima 800 palabras; no resumir.",
-        "- Nutricion: incluir indice glucemico, sintesis proteica, microbiota y menus en gramos.",
-        "- Entrenamiento: incluir mesociclos, RPE, tempo, biomecanica articular y prevencion de lesion; IMC>30 implica bajo impacto.",
-        "- Psicologia: integrar eje HPA, cortisol, dopamina, serotonina y protocolo conductual.",
+        "--- MODO JUNTA MÉDICA (solo cuando el usuario lo solicite explícitamente) ---",
+        "Actúa como junta integrada: Endocrino + Nutricionista clínico + Fisioterapeuta biomecánico + Psicólogo TCC.",
+        "Extensión mínima 800 palabras. Incluye biometría completa, menús en gramos, mesociclos, bioquímica y protocolo conductual.",
     ]
 
-    # Inyección de complejidad según el modo
-    if "ultra" in modo:
-        instrucciones.append("\nMODO ULTRA-PRO: Incluye explicaciones de 'Por qué biológico' detrás de cada prescripción.")
-
     if settings.IA_AUTONOMOUS_MODE:
-        instrucciones.append("\nMODO AUTÓNOMO: Puedes cambiar el objetivo del paciente si detectas riesgo (ej: déficit con ánimo <3).")
-        instrucciones.append("Trabaja de forma operativa: detecta, decide y adapta sin esperar instrucciones largas.")
+        instrucciones.append(
+            "\nMODO AUTÓNOMO: Si detectas riesgo (ánimo <3, señales de TCA, dolor persistente), "
+            "adapta el plan y alerta sin esperar instrucciones adicionales."
+        )
 
     return "\n".join(instrucciones)
 
@@ -224,6 +218,76 @@ EXPERT_MODE_KEYWORDS = (
 )
 
 
+def _es_solicitud_derivacion(texto_normalizado: str) -> Optional[str]:
+    """Detecta peticiones de derivación a especialista. Devuelve la especialidad o None."""
+    t = texto_normalizado or ""
+    palabras_derivacion = (
+        "deriva",
+        "derivame",
+        "quiero hablar con",
+        "cita con",
+        "ver a un",
+        "hablar con un",
+        "necesito un",
+        "recomiendame un",
+        "ponme con",
+        "manda con",
+        "quiero ver a",
+        "quiero ir al",
+        "quiero ir a un",
+        "quiero que me deriv",
+        "me puedes derivar",
+    )
+    if not any(k in t for k in palabras_derivacion):
+        return None
+    if any(k in t for k in ("psicolog", "psiquiatr", "salud mental", "terapeuta", "terapia mental")):
+        return "psicologia"
+    if any(k in t for k in ("nutricion", "nutricionista", "dietist", "alimentacion")):
+        return "nutricion"
+    if any(k in t for k in ("coach", "entrenador", "fisioterapeuta", "fisio", "rehabilit")):
+        return "entrenamiento"
+    if any(k in t for k in ("medico", "doctor", "medicina", "clinico")):
+        return "medicina"
+    return "especialista"
+
+
+def _respuesta_derivacion_breve(
+    especialidad: str,
+    contexto_adicional: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Respuesta breve y directa para peticiones de derivación a especialista."""
+    nombre = ""
+    if isinstance(contexto_adicional, dict):
+        nombre = str(contexto_adicional.get("usuario_nombre") or "").strip()
+    prefijo = f"{nombre}, h" if nombre else "H"
+
+    textos: Dict[str, str] = {
+        "psicologia": (
+            f"{prefijo}e registrado tu solicitud de derivación con psicología. "
+            "Tu especialista revisará tu caso y se pondrá en contacto contigo. "
+            "¿Hay algo concreto que quieras transmitirle (síntomas, situación actual, nivel de urgencia)?"
+        ),
+        "nutricion": (
+            f"{prefijo}e registrado tu solicitud de derivación con nutrición. "
+            "Tu dietista-nutricionista revisará tu perfil. "
+            "¿Tienes alguna restricción alimentaria o consulta específica que deba conocer?"
+        ),
+        "entrenamiento": (
+            f"{prefijo}e registrado tu solicitud de derivación con el coach/fisioterapeuta. "
+            "¿Tienes alguna lesión, limitación física o objetivo concreto que deba saber?"
+        ),
+        "medicina": (
+            f"{prefijo}e registrado tu solicitud de derivación médica. "
+            "Si es urgente, contacta directamente con tu médico o centro de salud. "
+            "¿Qué síntoma o consulta quieres transmitir?"
+        ),
+    }
+    return textos.get(
+        especialidad,
+        f"{prefijo}e registrado tu solicitud de derivación con {especialidad}. Tu especialista revisará tu caso pronto.",
+    )
+
+
 def _detectar_dominios(texto_normalizado: str) -> List[str]:
     """Detecta los dominios implicados en el mensaje para construir planes por ambito."""
     return [
@@ -231,6 +295,19 @@ def _detectar_dominios(texto_normalizado: str) -> List[str]:
         for dominio, claves in PALABRAS_DOMINIO.items()
         if any(clave in texto_normalizado for clave in claves)
     ]
+
+
+def _dominio_desde_seccion_activa(texto_normalizado: str) -> Optional[str]:
+    """Extrae la sección elegida por el frontend para priorizar ese ámbito."""
+    if "seccion activa: psicologia" in texto_normalizado or "sección activa: psicologia" in texto_normalizado:
+        return "salud_mental"
+    if "seccion activa: nutricion" in texto_normalizado or "sección activa: nutricion" in texto_normalizado:
+        return "nutricion"
+    if "seccion activa: entrenamiento" in texto_normalizado or "sección activa: entrenamiento" in texto_normalizado:
+        return "entrenamiento"
+    if "seccion activa: deporte" in texto_normalizado or "sección activa: deporte" in texto_normalizado:
+        return "entrenamiento"
+    return None
 
 
 def _detectar_objetivo_principal(texto_normalizado: str) -> str:
@@ -779,81 +856,209 @@ def _objetivo_desde_contexto(
     return objetivo_detectado
 
 
+def _detectar_duracion_plan(texto: str) -> int:
+    """Extrae duración en días del mensaje del usuario. Por defecto 7 días."""
+    if any(k in texto for k in ("mes", "mensual", "4 semanas", "cuatro semanas", "30 dias", "30 días")):
+        return 30
+    if any(k in texto for k in ("dos semanas", "2 semanas", "14 dias", "14 días", "quincena")):
+        return 14
+    if any(k in texto for k in ("semana", "7 dias", "7 días")):
+        return 7
+    if any(k in texto for k in ("3 dias", "3 días", "tres dias")):
+        return 3
+    return 7
+
+
+def _detectar_sesiones_entrenamiento(texto: str) -> Optional[int]:
+    """Extrae sesiones por semana solicitadas por usuario (rango 2-7)."""
+    t = _normalizar_texto(texto or "")
+    m = re.search(r"(\d{1,2})\s*(?:sesion(?:es)?|dias?)\s*(?:a la semana|/\s*semana|por semana)?", t)
+    if not m:
+        return None
+    try:
+        sesiones = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return max(2, min(7, sesiones))
+
+
+def _menu_dia_nutricion(dia: int, objetivo: str, prote: Optional[int], carbs: Optional[int], grasa: Optional[int], restricciones: str) -> str:
+    """Genera menú para un día concreto rotando alimentos."""
+    proteinas_opciones = [
+        ("pollo a la plancha", 180),
+        ("merluza al horno", 200),
+        ("salmón", 180),
+        ("pechuga de pavo", 180),
+        ("atún en agua", 150),
+        ("huevos revueltos", "3 huevos"),
+        ("ternera magra", 160),
+    ]
+    carbos_opciones = [
+        ("arroz", "90 g en crudo"),
+        ("patata cocida", "200 g"),
+        ("pasta integral", "80 g en crudo"),
+        ("boniato", "200 g"),
+        ("quinoa", "80 g en crudo"),
+        ("pan integral", "60 g"),
+        ("avena", "60 g"),
+    ]
+    verduras_opciones = [
+        "ensalada mixta", "brócoli al vapor", "espinacas salteadas",
+        "judías verdes", "pisto de verduras", "zanahoria y pepino",
+        "col lombarda", "coliflor al horno",
+    ]
+    idx = (dia - 1) % 7
+    prot_nombre, prot_cant = proteinas_opciones[idx]
+    carb_nombre, carb_cant = carbos_opciones[idx]
+    verd = verduras_opciones[idx]
+
+    # Ajuste si hay restricciones (sin gluten: elimina pasta/pan/avena)
+    if "celiac" in restricciones or "gluten" in restricciones:
+        if "pasta" in carb_nombre or "pan" in carb_nombre or "avena" in carb_nombre:
+            carb_nombre, carb_cant = "arroz", "90 g en crudo"
+
+    desayuno_opciones = [
+        "3 huevos revueltos + avena 60g + plátano",
+        "yogur griego 200g + granola 40g + fresas",
+        "tostada integral 60g + aguacate + 2 huevos",
+        "batido proteico 250ml + avena 50g + naranja",
+        "queso batido 200g + frutos secos 30g + melocotón",
+        "2 huevos + tortita avena 60g + arándanos",
+        "pavo 80g + pan integral 50g + tomate",
+    ]
+    desayuno = desayuno_opciones[idx]
+    if "celiac" in restricciones or "gluten" in restricciones:
+        desayuno = desayuno.replace("avena", "arroz inflado 40g").replace("tostada integral", "tostada sin gluten").replace("pan integral", "pan sin gluten")
+
+    bloque_macros = ""
+    if prote and carbs and grasa:
+        bloque_macros = f" (~P:{prote}g / C:{carbs}g / G:{grasa}g)"
+
+    return (
+        f"\nDía {dia}{bloque_macros if dia == 1 else ''}:"
+        f"\n  Desayuno: {desayuno}"
+        f"\n  Comida: {prot_nombre} {prot_cant} + {carb_nombre} {carb_cant} + {verd}"
+        f"\n  Merienda: yogur alto proteína 150g + fruta de temporada"
+        f"\n  Cena: {proteinas_opciones[(idx+2)%7][0]} {proteinas_opciones[(idx+2)%7][1]} + verdura salteada"
+    )
+
+
 def _plan_nutricion_preciso(
     objetivo: str,
     contexto_adicional: Optional[Dict[str, Any]],
     escenarios: List[str],
+    texto_usuario: str = "",
 ) -> str:
-    """Entrega plan nutricional concreto usando perfil y memoria existente."""
+    """Entrega plan nutricional completo y personalizado por perfil y duración solicitada."""
     memoria = _extraer_memoria_respuestas(contexto_adicional)
     peso = _valor_float((contexto_adicional or {}).get("peso_actual_kg"))
     altura = _valor_float((contexto_adicional or {}).get("altura_cm"))
     imc = _valor_float((contexto_adicional or {}).get("imc_actual"))
+    animo = _valor_float((contexto_adicional or {}).get("animo_reciente"))
+    nombre = str((contexto_adicional or {}).get("usuario_nombre") or "").strip()
     horario = str(memoria.get("horario") or "").strip() or "flexible"
     restricciones = _normalizar_texto(str(memoria.get("restricciones") or "ninguna"))
+    duracion = _detectar_duracion_plan(_normalizar_texto(texto_usuario))
 
-    kcal = None
-    prote = None
-    carbs = None
-    grasa = None
+    # Cálculo de macros personalizado
+    kcal = prote = carbs = grasa = None
     if peso and peso > 25:
+        tmb = (10 * peso + (6.25 * altura if altura else 0) - 5 * 25 + 5)  # Mifflin estimado
+        factor_actividad = 1.55 if "entren" in _normalizar_texto(texto_usuario) else 1.375
+        tdee = int(tmb * factor_actividad)
+
         if objetivo == "ganancia_muscular":
-            kcal = int(round(peso * 34))
-            prote = round(peso * 2.0)
-            grasa = round(peso * 0.9)
+            kcal = tdee + 250
+            prote = round(peso * 2.2)
+            grasa = round(peso * 1.0)
         elif objetivo == "perdida_grasa":
-            kcal = int(round(peso * 27))
+            kcal = max(1200, tdee - 400)
             prote = round(peso * 2.0)
             grasa = round(peso * 0.8)
         else:
-            kcal = int(round(peso * 30))
+            kcal = tdee
             prote = round(peso * 1.8)
             grasa = round(peso * 0.9)
-
         kcal_prote = int(prote * 4)
         kcal_grasa = int(grasa * 9)
         carbs = max(80, int(round((kcal - kcal_prote - kcal_grasa) / 4)))
 
+    # Suplementación según objetivo y estado de ánimo
+    suplementos = []
+    if objetivo == "ganancia_muscular":
+        suplementos += ["Creatina monohidrato 5g/día", "Proteína de suero 30g post-entreno"]
+    elif objetivo == "perdida_grasa":
+        suplementos += ["Cafeína 100-200mg pre-entreno (opcional)", "Omega-3 1g/día"]
+    if animo and animo < 5:
+        suplementos += ["Magnesio 300mg antes de dormir (ánimo bajo detectado)", "Vitamina D3 2000UI/día"]
+
+    # Ajuste por turnos
     ajuste_turnos = ""
     if "trabajo_por_turnos" in escenarios or "turno" in _normalizar_texto(horario):
-        ajuste_turnos = (
-            "\nAjuste turnos: usa bloques, no horas fijas -> "
-            "Comida 1 al despertar, Comida 2 a mitad de turno, Comida 3 post-turno, snack de seguridad si hay hambre nocturna."
-        )
+        ajuste_turnos = "\n⏰ Ajuste turnos: usa bloques de comida, no horas fijas. Prioriza comida 1 al despertar y comida post-turno."
 
+    # Restricciones alimentarias
     aviso_restricciones = ""
     if restricciones not in {"", "ninguna", "no"}:
-        aviso_restricciones = f"\nRestricciones detectadas: {restricciones}. Ajusta alimentos manteniendo la estructura de macros."
+        aviso_restricciones = f"\n⚠️ Restricciones activas: {restricciones}. Los alimentos listados son compatibles."
 
-    cabecera = "Plan nutricional preciso (base inicial, ajustable cada 7 dias):"
+    # Cabecera personalizada
+    saludo = f"Plan nutricional para {nombre} — " if nombre else "Plan nutricional — "
+    etiqueta_obj = {"ganancia_muscular": "Ganancia muscular", "perdida_grasa": "Pérdida de grasa"}.get(objetivo, "Mantenimiento/adherencia")
+
     if kcal and prote and carbs and grasa:
-        bloque_kcal = (
-            f"\n- Objetivo calórico diario: ~{kcal} kcal"
-            f"\n- Macros guía: proteína {prote} g, carbohidratos {carbs} g, grasas {grasa} g"
+        bloque_macros = (
+            f"\n📊 Macros diarios objetivo: {kcal} kcal | Proteína: {prote}g | Carbohidratos: {carbs}g | Grasas: {grasa}g"
+            f"\n   (Basado en: peso {peso}kg{'  altura ' + str(int(altura)) + 'cm' if altura else ''}{'  IMC ' + str(round(imc,1)) if imc else ''})"
         )
     else:
-        bloque_kcal = (
-            "\n- Objetivo calórico: sin peso fiable en contexto, inicio con estructura por porciones"
-            "\n- Por comida principal: 1 palma de proteína + 1 puño de carbohidrato + 1-2 puños de verdura + 1 pulgar de grasa"
+        bloque_macros = (
+            "\n📊 Sin peso registrado → estructura por porciones:"
+            "\n   Por ingesta: 1 palma de proteína + 1 puño de carbohidrato complejo + 2 puños de verdura + 1 pulgar de grasa"
         )
 
+    # Generar los días del plan
+    dias_texto = ""
+    for d in range(1, duracion + 1):
+        dias_texto += _menu_dia_nutricion(d, objetivo, prote, carbs, grasa, restricciones)
+
+    # Bloque de control/ajuste según duración
+    if duracion >= 30:
+        control = (
+            "\n\n📅 Control mensual:"
+            "\n- Semana 1-2: estabilización de rutina + registro de adherencia"
+            "\n- Semana 3: ajuste de kcal según progreso (±150 kcal si no hay cambio en peso)"
+            "\n- Semana 4: consolidación + planificación del mes siguiente"
+            "\n- Si peso ↓ >1kg/semana en pérdida: sube 100 kcal para evitar pérdida muscular"
+            "\n- Si peso ↑ >0.5kg/semana en ganancia: baja 150 kcal para controlar grasa"
+        )
+    elif duracion >= 14:
+        control = (
+            "\n\n📅 Control quincenal:"
+            "\n- Día 7: revisa energía (1-10) y adherencia. Si <6, simplifica las comidas."
+            "\n- Día 14: pesa y mide. Ajusta ±100 kcal según resultado."
+        )
+    else:
+        control = (
+            "\n\n📅 Control semanal:"
+            "\n- Si no ves cambio en energía o peso al final de la semana: ajusta +/-150 kcal"
+            "\n- Si hay hambre excesiva: añade snack de 150-200 kcal proteico"
+        )
+
+    bloque_suplementos = ""
+    if suplementos:
+        bloque_suplementos = "\n\n💊 Suplementación recomendada:\n- " + "\n- ".join(suplementos)
+
     return (
-        f"{cabecera}{bloque_kcal}"
-        "\n\nEstructura diaria (4 ingestas):"
-        "\n1) Desayuno: proteína + carbohidrato complejo + fruta"
-        "\n2) Comida: proteína principal + arroz/patata/legumbre + verdura"
-        "\n3) Merienda: yogur/queso batido o sandwich proteico + fruta"
-        "\n4) Cena: proteína + verduras + carbohidrato moderado"
-        "\n\nEjemplo rápido (ganancia muscular):"
-        "\n- Desayuno: 3 huevos + avena + plátano"
-        "\n- Comida: pollo 180 g + arroz 120 g en crudo equivalente diario + ensalada"
-        "\n- Merienda: yogur alto en proteína + frutos secos"
-        "\n- Cena: salmón 180 g + patata + verduras"
-        "\n\nControl semanal:"
-        "\n- Si no subes 0.2-0.4 kg/semana en ganancia muscular: +150 kcal/día"
-        "\n- Si sube grasa demasiado rápido: -100/150 kcal"
-        f"\nContexto perfil: peso={peso if peso else 'N/D'} kg, altura={altura if altura else 'N/D'} cm, imc={imc if imc else 'N/D'}"
-        f"\nHorario reportado: {horario}{ajuste_turnos}{aviso_restricciones}"
+        f"{saludo}{etiqueta_obj} · {duracion} días"
+        f"{bloque_macros}"
+        f"{aviso_restricciones}"
+        f"{ajuste_turnos}"
+        f"\n{'─'*40}"
+        f"{dias_texto}"
+        f"{control}"
+        f"{bloque_suplementos}"
+        f"\n\n🔗 Este plan va coordinado con entrenamiento y gestión emocional. Dime si quieres que ajuste algún día específico."
     )
 
 
@@ -861,61 +1066,498 @@ def _plan_entrenamiento_preciso(
     objetivo: str,
     contexto_adicional: Optional[Dict[str, Any]],
     escenarios: List[str],
+    texto_usuario: str = "",
 ) -> str:
-    """Entrega rutina concreta en formato ejecutable."""
+    """Entrega rutina completa personalizada con progresión, por días y duración solicitada."""
     frecuencia = (contexto_adicional or {}).get("frecuencia_gym")
-    dias = 4 if isinstance(frecuencia, int) and frecuencia >= 4 else 3
-    if objetivo == "ganancia_muscular":
-        foco = "hipertrofia con progresion"
-    elif objetivo == "perdida_grasa":
-        foco = "fuerza + gasto energetico"
-    else:
-        foco = "salud y adherencia"
+    peso = _valor_float((contexto_adicional or {}).get("peso_actual_kg"))
+    imc = _valor_float((contexto_adicional or {}).get("imc_actual"))
+    animo = _valor_float((contexto_adicional or {}).get("animo_reciente"))
+    nombre = str((contexto_adicional or {}).get("usuario_nombre") or "").strip()
+    duracion = _detectar_duracion_plan(_normalizar_texto(texto_usuario))
 
-    ajuste_turnos = ""
-    if "trabajo_por_turnos" in escenarios:
-        ajuste_turnos = "\nAjuste turnos: prioriza sesion corta A/B de 35-45 min cuando el turno sea pesado."
+    sesiones_solicitadas = _detectar_sesiones_entrenamiento(texto_usuario)
+
+    # Días por semana (prioridad: petición del paciente > perfil guardado > default)
+    if isinstance(sesiones_solicitadas, int):
+        dias_semana = sesiones_solicitadas
+    elif isinstance(frecuencia, int) and frecuencia >= 5:
+        dias_semana = 5
+    elif isinstance(frecuencia, int) and frecuencia >= 4:
+        dias_semana = 4
+    else:
+        dias_semana = 3
+
+    # IMC alto → bajo impacto
+    bajo_impacto = bool(imc and imc > 30)
+
+    # Foco según objetivo
+    foco_map = {
+        "ganancia_muscular": "hipertrofia + progresión de carga",
+        "perdida_grasa": "fuerza + cardio metabólico",
+    }
+    foco = foco_map.get(objetivo, "salud funcional y adherencia")
+
+    # Reducción de volumen si ánimo bajo
+    volumen_nota = ""
+    if animo is not None and animo < 4:
+        volumen_nota = "\n⚠️ Ánimo bajo detectado: reduce series en 1 por ejercicio esta semana. Prioriza movimiento sobre rendimiento."
+
+    # Estructura de días según frecuencia y objetivo
+    if dias_semana >= 4:
+        estructura = [
+            ("Día A – Pecho + Hombros + Tríceps", [
+                ("Press banca / Press pecho máquina", "4x8-10", "RPE 8", "2'"),
+                ("Press militar mancuernas", "3x10-12", "RPE 7", "90\""),
+                ("Elevaciones laterales", "3x15", "RPE 7", "60\""),
+                ("Fondos en paralelas / Asistido", "3x10", "RPE 8", "90\""),
+            ]),
+            ("Día B – Espalda + Bíceps", [
+                ("Jalón al pecho / Dominadas asistidas", "4x8-10", "RPE 8", "2'"),
+                ("Remo con barra / Remo máquina", "4x10", "RPE 8", "2'"),
+                ("Curl bíceps mancuernas", "3x12", "RPE 7", "60\""),
+                ("Facepulls / Remo en polea", "3x15", "RPE 6", "60\""),
+            ]),
+            ("Día C – Piernas enfoque cuádriceps", [
+                ("Sentadilla libre / Prensa 45°" if not bajo_impacto else "Prensa 45° ángulo bajo", "4x8-10", "RPE 8", "2'30\""),
+                ("Extensiones cuádriceps", "3x12-15", "RPE 7", "90\""),
+                ("Zancadas andando", "3x10 c/p", "RPE 7", "90\""),
+                ("Elevaciones gemelo", "4x15-20", "RPE 7", "60\""),
+            ]),
+            ("Día D – Piernas enfoque posterior + Core", [
+                ("Peso muerto rumano" if not bajo_impacto else "Curl femoral en máquina", "4x10", "RPE 8", "2'"),
+                ("Hip thrust / Puente glúteo", "4x12", "RPE 8", "90\""),
+                ("Sentadilla sumo o abductores", "3x12", "RPE 7", "90\""),
+                ("Plank con variantes", "3x40\"", "RPE 6", "45\""),
+            ]),
+        ]
+    else:
+        estructura = [
+            ("Día A – Tren superior (empuje + tirón)", [
+                ("Press banca / Press pecho máquina", "4x10", "RPE 8", "2'"),
+                ("Jalón al pecho / Dominadas asistidas", "4x10", "RPE 8", "2'"),
+                ("Press hombros mancuernas", "3x12", "RPE 7", "90\""),
+                ("Curl + extensión tríceps en polea", "3x12", "RPE 7", "60\""),
+            ]),
+            ("Día B – Tren inferior + Core", [
+                ("Sentadilla libre / Prensa" if not bajo_impacto else "Prensa 45°", "4x10", "RPE 8", "2'30\""),
+                ("Peso muerto rumano" if not bajo_impacto else "Curl femoral", "3x10", "RPE 8", "2'"),
+                ("Zancadas andando", "3x10 c/p", "RPE 7", "90\""),
+                ("Plank + abdominales", "3x40\"", "RPE 6", "45\""),
+            ]),
+            ("Día C – Cuerpo completo + Cardio", [
+                ("Sentadilla goblet / Peso muerto" if not bajo_impacto else "Sentadilla asistida", "3x12", "RPE 7", "90\""),
+                ("Remo con mancuernas", "3x12", "RPE 7", "90\""),
+                ("Flexiones / Fondos", "3x10-15", "RPE 7", "90\""),
+                ("Cardio zona 2: 20 min bicicleta/elíptica", "1 serie", "FC 120-140 ppm", "—"),
+            ]),
+        ]
+
+    # Generar texto de la rutina
+    saludo = f"Rutina de entrenamiento para {nombre} — " if nombre else "Rutina de entrenamiento — "
+    etiqueta_obj = {"ganancia_muscular": "Hipertrofia", "perdida_grasa": "Pérdida de grasa + tonificación"}.get(objetivo, "Salud funcional")
+
+    cuerpo_dias = ""
+    for sesion in estructura[:dias_semana]:
+        titulo_dia, ejercicios_dia = sesion
+        cuerpo_dias += f"\n\n**{titulo_dia}**"
+        cuerpo_dias += "\n| Ejercicio | Series×Reps | RPE | Descanso |"
+        cuerpo_dias += "\n|-----------|-------------|-----|----------|"
+        for ej, sereps, rpe, desc in ejercicios_dia:
+            cuerpo_dias += f"\n| {ej} | {sereps} | {rpe} | {desc} |"
+
+    # Cardio complementario
+    cardio = ""
+    if objetivo == "perdida_grasa":
+        cardio = "\n\n🏃 Cardio: 2-3 sesiones adicionales/semana de 20-30 min en zona 2 (FC ~120-140 ppm) o caminar 8.000 pasos/día."
+    elif objetivo == "ganancia_muscular":
+        cardio = "\n\n🚴 Cardio: 1-2 sesiones de 15-20 min zona 2 para salud cardiovascular sin interferir con recuperación."
+
+    # Progresión según duración
+    if duracion >= 30:
+        progresion = (
+            "\n\n📈 Progresión mensual:"
+            "\n- Semana 1-2 (Acumulación): aprende técnica. Objetivo: completar todas las series con RPE indicado."
+            "\n- Semana 3 (Intensificación): sube 2.5-5 kg en ejercicios principales si RPE ≤7."
+            "\n- Semana 4 (Descarga): reduce volumen un 40%. Recuperación activa."
+        )
+    elif duracion >= 14:
+        progresion = (
+            "\n\n📈 Progresión quincenal:"
+            "\n- Semana 1: técnica y base. RPE 7 máximo."
+            "\n- Semana 2: añade 2.5 kg en ejercicios base si completas todas las series."
+        )
+    else:
+        progresion = (
+            "\n\n📈 Progresión semanal:"
+            "\n- Si completas todas las series con técnica limpia: sube 2.5-5% de carga la semana siguiente."
+            "\n- Si duermes <6h o ánimo <4: reduce volumen un 20% sin culpa."
+        )
 
     ajuste_tiempo = ""
     if "tiempo_limitado" in escenarios:
         ajuste_tiempo = (
-            "\n\nProtocolo express (20 minutos):"
-            "\n- Min 0-3: movilidad dinamica + activacion"
-            "\n- Min 3-15: bloque principal 3 rondas (empuje + tiron + pierna)"
-            "\n- Min 15-20: core + respiracion para recuperar"
-            "\nSi hoy solo tienes 20 minutos, este bloque mantiene progreso sin romper adherencia."
+            "\n\n⚡ Protocolo express (si tienes <25 min):"
+            "\n- 3 rondas de: empuje (10 reps) + tirón (10 reps) + sentadilla (12 reps). Sin descanso entre ejercicios, 90\" entre rondas."
         )
 
     return (
-        f"Rutina precisa ({dias} dias/semana, foco: {foco}):"
-        "\n- Dia A: sentadilla, press banca, remo, core"
-        "\n- Dia B: peso muerto rumano, press militar, jalon, zancadas"
-        "\n- Dia C: sentadilla frontal/prensa, dominantes de empuje y tiron, abdomen"
-        "\n\nRegla de progresion:"
-        "\n- Si completas 3x10 limpio en un ejercicio -> sube 2.5-5% la siguiente sesion"
-        "\n- Si duermes mal o hay fatiga alta -> reduce 20% el volumen"
-        "\n\nCardio: 2 sesiones de 15-20 min zona 2 tras fuerza o en dias alternos"
-        f"{ajuste_turnos}{ajuste_tiempo}"
+        f"{saludo}{etiqueta_obj} · {duracion} días · {dias_semana} sesiones/semana"
+        f"{volumen_nota}"
+        f"{'' if not bajo_impacto else chr(10) + '⚠️ IMC >30: rutina de bajo impacto articular seleccionada.'}"
+        f"\n{'─'*40}"
+        f"{cuerpo_dias}"
+        f"{cardio}"
+        f"{progresion}"
+        f"{ajuste_tiempo}"
+        f"\n\n🔗 Coordínalo con tu nutrición: los días de entrenamiento aumenta los carbohidratos ~30-50g extra."
     )
 
 
 def _plan_psicologia_preciso(
     contexto_adicional: Optional[Dict[str, Any]],
     escenarios: List[str],
+    texto_usuario: str = "",
 ) -> str:
-    """Entrega intervención breve de regulación emocional con pasos claros."""
+    """Entrega plan psicológico personalizado con técnicas TCC/ACT y progresión por días."""
     sentimiento = str((contexto_adicional or {}).get("sentimiento_reciente") or "").strip() or "no informado"
+    animo = _valor_float((contexto_adicional or {}).get("animo_reciente"))
+    nombre = str((contexto_adicional or {}).get("usuario_nombre") or "").strip()
+    duracion = _detectar_duracion_plan(_normalizar_texto(texto_usuario))
+
+    saludo = f"Plan psicológico para {nombre} — " if nombre else "Plan psicológico — "
+
+    # Nivel de intensidad según ánimo
+    if animo is not None and animo <= 3:
+        nivel = "alta_intensidad"
+        nivel_txt = "Regulación prioritaria (ánimo crítico detectado)"
+    elif animo is not None and animo <= 6:
+        nivel = "media"
+        nivel_txt = "Estabilización y construcción de recursos"
+    else:
+        nivel = "mantenimiento"
+        nivel_txt = "Optimización y prevención"
+
+    # Técnicas base según nivel
+    tecnicas_base = {
+        "alta_intensidad": [
+            ("Respiración diafragmática 4-4-6", "Inhala 4s por nariz, mantén 4s, exhala 6s por boca. 5 ciclos cada vez que notes tensión."),
+            ("Técnica grounding 5-4-3-2-1", "Nombra: 5 cosas que ves, 4 que tocas, 3 que oyes, 2 que hueles, 1 que saboreas. Ancla al presente."),
+            ("Defusión cognitiva", "Cuando aparezca un pensamiento angustiante, dite: 'Estoy teniendo el pensamiento de que...' Crea distancia del pensamiento."),
+        ],
+        "media": [
+            ("Registro de pensamientos (TCC)", "Anota: situación → pensamiento automático → emoción (0-10) → pensamiento alternativo más realista."),
+            ("Activación conductual", "Elige 1 actividad placentera al día (mínimo 15 min). No negocies. Regístrala y puntúa cómo te sentiste después."),
+            ("Higiene del sueño", "Hora fija de dormir/despertar ±30 min. Pantallas off 45 min antes. Temperatura 18-20°C."),
+        ],
+        "mantenimiento": [
+            ("Mindfulness 10 min/día", "Observa pensamientos como nubes que pasan. No los juzgues, no los sigas. App sugerida: Headspace, Calm o YouTube."),
+            ("Revisión semanal de valores (ACT)", "Cada domingo: ¿Qué acciones hice esta semana coherentes con lo que más valoro? ¿Cuáles me alejaron?"),
+            ("Gratitud activa", "3 cosas concretas por las que estás agradecido/a cada noche. Específicas, no genéricas."),
+        ],
+    }
+
+    tecnicas = tecnicas_base[nivel]
+
+    # Plan día a día (simplificado para duraciones largas)
+    if duracion <= 7:
+        dias_plan = []
+        tareas_rotacion = [
+            "Mañana: respiración 4-4-6 (5 min) + intención del día (1 frase)",
+            "Tarde: registro de 1 pensamiento automático",
+            "Noche: diario emocional (¿qué sentí hoy?, ¿qué lo generó?, ¿cómo respondí?)",
+            "Práctica de defusión ante 1 pensamiento difícil",
+            "Activación: 1 actividad placentera elegida (15-30 min)",
+            "Higiene sueño: apaga pantallas 45 min antes",
+            "Revisión: ¿Qué técnica me ha ayudado más esta semana?",
+        ]
+        for d in range(1, duracion + 1):
+            dias_plan.append(f"\nDía {d}: {tareas_rotacion[(d-1) % len(tareas_rotacion)]}")
+        texto_dias = "".join(dias_plan)
+    else:
+        # Para planes de 14-30 días, estructura semanal
+        semanas = (duracion + 6) // 7
+        semanas_plan = []
+        fases = [
+            ("Semana de toma de contacto", "Establece el hábito de registro diario (5 min/día). Sin presión de cambiar, solo observar."),
+            ("Semana de intervención", "Aplica 1 técnica por día de forma consistente. Puntúa cada noche el malestar (0-10)."),
+            ("Semana de profundización", "Identifica tus 3 disparadores principales. Diseña respuesta alternativa para cada uno."),
+            ("Semana de consolidación", "Integra lo aprendido. Define tu protocolo personal mínimo viable para días difíciles."),
+        ]
+        for s in range(1, min(semanas + 1, 5)):
+            titulo_s, desc_s = fases[min(s - 1, 3)]
+            semanas_plan.append(f"\nSemana {s} — {titulo_s}: {desc_s}")
+        texto_dias = "".join(semanas_plan)
+
+    # Semáforo de acción
+    semaforo = (
+        "\n\n🚦 Semáforo de acción:"
+        "\n- 🟢 Malestar ≤4/10: continúa rutina habitual"
+        "\n- 🟡 Malestar 5-7/10: activa grounding + reduce exigencia del día"
+        "\n- 🔴 Malestar ≥8/10 o ideas de daño: contacta con profesional hoy"
+    )
+
+    # Conexión con nutrición y entrenamiento
+    nexo = (
+        "\n\n🔗 Conexión cuerpo-mente:"
+        "\n- Los días de ánimo bajo, no canceles el entreno: cambia por 20 min de caminar."
+        "\n- El eje cortisol-glucosa se regula mejor con proteína en desayuno y descanso activo."
+        "\n- Si hay hambre emocional nocturna: técnica grounding antes de ir a la cocina."
+    )
+
+    cuerpo_tecnicas = "\n\n🛠️ Técnicas asignadas:"
+    for tec_nombre, tec_desc in tecnicas:
+        cuerpo_tecnicas += f"\n\n**{tec_nombre}**\n{tec_desc}"
+
     return (
-        "Plan psicologico preciso (7 dias, enfoque funcional):"
-        "\n- Manana (3 min): respiracion 4-4-4 + intencion del dia"
-        "\n- Durante picos: tecnica grounding 5-4-3-2-1"
-        "\n- Noche (5 min): registro de disparador, pensamiento automatico y respuesta alternativa"
-        "\n\nSemaforo de accion:"
-        "\n- Verde: malestar <=4/10 -> continuar rutina"
-        "\n- Amarillo: 5-7/10 -> bajar exigencia, aumentar regulacion"
-        "\n- Rojo: >=8/10 o ideas de dano -> apoyo profesional inmediato"
-        f"\nEstado emocional reciente detectado: {sentimiento}"
-        f"\nEscenarios activos: {', '.join(escenarios) if escenarios else 'sin escenario especial'}"
+        f"{saludo}{nivel_txt} · {duracion} días"
+        f"\nEstado emocional reciente: {sentimiento}"
+        f"\nEscenarios activos: {', '.join(escenarios) if escenarios else 'ninguno detectado'}"
+        f"\n{'─'*40}"
+        f"{cuerpo_tecnicas}"
+        f"\n\n📅 Estructura del plan:"
+        f"{texto_dias}"
+        f"{semaforo}"
+        f"{nexo}"
+    )
+
+
+def _es_solicitud_integral(dominios: List[str], texto: str) -> bool:
+    """Detecta si el usuario pide plan combinado de 2 o más áreas simultáneamente."""
+    dominios_nucleares = [
+        dominio for dominio in dominios if dominio in {"nutricion", "entrenamiento", "salud_mental"}
+    ]
+    if len(set(dominios_nucleares)) >= 2:
+        return True
+    palabras_integral = (
+        "todo junto", "las 3", "las tres", "integral", "completo",
+        "combinado", "todo a la vez", "dieta y rutina", "rutina y dieta",
+        "nutricion y entrenamiento", "entrenamiento y nutricion",
+        "mental y fisico", "fisico y mental", "mente y cuerpo",
+    )
+    return any(p in texto for p in palabras_integral)
+
+
+def _dominio_desde_memoria(contexto_adicional: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Infere dominio principal a partir de memoria activa/contexto reciente."""
+    if not isinstance(contexto_adicional, dict):
+        return None
+
+    tema = _normalizar_texto(str(contexto_adicional.get("memoria_tema") or ""))
+    if any(k in tema for k in ("dieta", "nutri", "comida")):
+        return "nutricion"
+    if any(k in tema for k in ("entren", "rutina", "gym")):
+        return "entrenamiento"
+    if any(k in tema for k in ("psico", "ansiedad", "sueno", "salud_mental")):
+        return "salud_mental"
+
+    respuestas = contexto_adicional.get("memoria_respuestas")
+    if isinstance(respuestas, dict):
+        objetivo = _normalizar_texto(str(respuestas.get("objetivo") or ""))
+        if any(k in objetivo for k in ("masa", "grasa", "peso", "dieta")):
+            return "nutricion"
+    return None
+
+
+def _dominio_forzado_por_input_corto(
+    texto: str,
+    contexto_adicional: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """
+    Convierte respuestas ultracortas de continuidad en un dominio útil.
+    Ejemplos: "1" -> nutrición, "2" -> entrenamiento, "3" -> salud mental,
+    "4" -> visual. También maneja frases de duración tipo "para un mes".
+    """
+    t = _normalizar_texto(texto)
+
+    if t in {"1", "1.", "uno", "opcion 1", "opción 1"}:
+        return "nutricion"
+    if t in {"2", "2.", "dos", "opcion 2", "opción 2"}:
+        return "entrenamiento"
+    if t in {"3", "3.", "tres", "opcion 3", "opción 3"}:
+        return "salud_mental"
+    if t in {"4", "4.", "cuatro", "opcion 4", "opción 4"}:
+        return "visual"
+
+    # Si el usuario solo indica duración, mantenemos continuidad por memoria.
+    if _detectar_duracion_plan(t) != 7 and not any(
+        k in t for k in ("dieta", "nutri", "comida", "rutina", "entren", "ansiedad", "sueno", "psico")
+    ):
+        return _dominio_desde_memoria(contexto_adicional)
+
+    return None
+
+
+def _plan_integral_preciso(
+    objetivo: str,
+    contexto_adicional: Optional[Dict[str, Any]],
+    escenarios: List[str],
+    texto_usuario: str = "",
+) -> str:
+    """
+    Plan integral AuraFit: nutrición + entrenamiento + psicología interconectados.
+    Muestra cómo las 3 áreas se afectan mutuamente y genera un plan diario unificado.
+    """
+    memoria = _extraer_memoria_respuestas(contexto_adicional)
+    peso = _valor_float((contexto_adicional or {}).get("peso_actual_kg"))
+    altura = _valor_float((contexto_adicional or {}).get("altura_cm"))
+    imc = _valor_float((contexto_adicional or {}).get("imc_actual"))
+    animo = _valor_float((contexto_adicional or {}).get("animo_reciente"))
+    nombre = str((contexto_adicional or {}).get("usuario_nombre") or "").strip()
+    frecuencia = (contexto_adicional or {}).get("frecuencia_gym") or 3
+    sentimiento = str((contexto_adicional or {}).get("sentimiento_reciente") or "neutral").strip()
+    restricciones = _normalizar_texto(str(memoria.get("restricciones") or "ninguna"))
+    duracion = _detectar_duracion_plan(_normalizar_texto(texto_usuario))
+    try:
+        frecuencia = int(frecuencia)
+    except (TypeError, ValueError):
+        frecuencia = 3
+
+    saludo = f"## Plan Integral AuraFit — {nombre}\n" if nombre else "## Plan Integral AuraFit\n"
+
+    # ── DATOS BASE ──────────────────────────────────────────────────────────
+    kcal = prote = carbs = grasa = None
+    if peso and peso > 25:
+        tmb = 10 * peso + (6.25 * altura if altura else 0) - 5 * 25 + 5
+        factor = 1.55 if frecuencia >= 4 else 1.375
+        tdee = int(tmb * factor)
+        if objetivo == "ganancia_muscular":
+            kcal, prote = tdee + 250, round(peso * 2.2)
+            grasa = round(peso * 1.0)
+            carbs = round((kcal - prote * 4 - grasa * 9) / 4)
+        elif objetivo == "perdida_grasa":
+            kcal, prote = max(1200, tdee - 400), round(peso * 2.0)
+            grasa = round(peso * 0.8)
+            carbs = round((kcal - prote * 4 - grasa * 9) / 4)
+        else:
+            kcal, prote = tdee, round(peso * 1.8)
+            grasa = round(peso * 0.9)
+            carbs = round((kcal - prote * 4 - grasa * 9) / 4)
+    else:
+        calorias_base = {
+            "ganancia_muscular": 2400,
+            "perdida_grasa": 1800,
+            "bienestar_mental": 2000,
+            "rendimiento_global": 2200,
+            "adherencia_sostenible": 2000,
+        }
+        kcal = calorias_base.get(objetivo, 2000)
+        prote = 140 if objetivo in {"ganancia_muscular", "perdida_grasa"} else 120
+        grasa = 65
+        carbs = max(160, round((kcal - prote * 4 - grasa * 9) / 4))
+
+    datos_base = "\n### Perfil integrado\n"
+    if peso:
+        datos_base += f"- Peso: {peso} kg"
+        if altura:
+            datos_base += f" | Altura: {altura} cm"
+        if imc:
+            datos_base += f" | IMC: {imc}"
+        datos_base += "\n"
+    if kcal:
+        datos_base += f"- TDEE objetivo: **{kcal} kcal/día** | P: {prote}g · C: {carbs}g · G: {grasa}g\n"
+    datos_base += f"- Ánimo reciente: {sentimiento} ({animo}/10)" if animo else f"- Ánimo reciente: {sentimiento}"
+    datos_base += f"\n- Objetivo principal: **{objetivo.replace('_', ' ')}** | Duración: {duracion} días"
+    if restricciones != "ninguna":
+        datos_base += f"\n- ⚠️ Restricciones: {restricciones}"
+
+    # ── NEXO ENTRE LAS 3 ÁREAS ──────────────────────────────────────────────
+    nexos: list = []
+    if animo is not None and animo <= 5:
+        nexos.append("🧠→🍽️ El ánimo bajo eleva el cortisol → aumenta el antojo de azúcar. "
+                     "Prioriza proteína en desayuno para estabilizar glucosa y estado de ánimo.")
+        nexos.append("🧠→💪 Con ánimo ≤5, reduce intensidad de entrenamiento (-20% RPE). "
+                     "Sesión corta de 25-30 min es más efectiva que forzar 60 min.")
+    if objetivo == "ganancia_muscular":
+        nexos.append("💪→🍽️ El anabolismo muscular requiere superávit calórico y ventana post-entreno: "
+                     f"consume {round((prote or 0) * 0.3)}g proteína + hidratos simples en los 45 min post-sesión.")
+    if objetivo == "perdida_grasa":
+        nexos.append("🍽️→💪 El déficit calórico puede bajar energía en entreno: programa sesiones a las 2-3h de la comida principal.")
+        nexos.append("🧠→🍽️ El hambre emocional sabotea el déficit más que ningún otro factor. "
+                     "Usa la técnica de pausa de 10 min antes de comer fuera de horario.")
+    if "estres" in escenarios or (animo is not None and animo <= 4):
+        nexos.append("🧠→💪 El estrés elevado aumenta el cortisol → inhibe la síntesis proteica. "
+                     "Añade 5 min de respiración diafragmática post-entreno para cortarlo.")
+    if not nexos:
+        nexos = [
+            "Las 3 áreas forman un ciclo virtuoso: mejor nutrición → más energía en entreno → "
+            "endorfinas → mejor estado de ánimo → más adherencia nutricional.",
+        ]
+
+    nexo_texto = "\n### 🔗 Cómo se conectan tus 3 áreas\n" + "\n".join(f"- {n}" for n in nexos)
+
+    # ── PLAN DIARIO INTEGRADO ────────────────────────────────────────────────
+    dias_entreno = {1, 2, 4, 5, 7} if frecuencia >= 5 else {1, 3, 5, 7} if frecuencia == 4 else {1, 3, 5} if frecuencia == 3 else {1, 4}
+    nombres_dia = {1: "Lun", 2: "Mar", 3: "Mié", 4: "Jue", 5: "Vie", 6: "Sáb", 7: "Dom"}
+
+    splits = {
+        1: "Pecho + Hombro + Tríceps",
+        2: "Espalda + Bíceps",
+        3: "Cuádriceps + Core",
+        4: "Isquios + Glúteo + Pantorrilla",
+        5: "Full Body (carga moderada)",
+        6: "Cardio ligero / movilidad",
+        7: "Cardio ligero / movilidad",
+    }
+    tecnicas_psico_rota = [
+        "Respiración 4-4-6 (5 min al despertar)",
+        "Registro de pensamientos: situación→emoción→alternativa",
+        "Grounding 5-4-3-2-1 si hay tensión",
+        "Actividad placentera mínima 15 min",
+        "Mindfulness 10 min (app o YouTube)",
+        "Revisión de valores ACT (5 min nocturna)",
+        "Gratitud activa: 3 cosas concretas antes de dormir",
+    ]
+
+    dias_mostrar = min(duracion, 7)
+    plan_diario = f"\n\n### 📅 Plan diario integrado ({dias_mostrar} días)\n"
+    for dia in range(1, dias_mostrar + 1):
+        nombre_dia = nombres_dia.get(dia, f"Día {dia}")
+        es_entreno = dia in dias_entreno
+        menu = _menu_dia_nutricion(dia, objetivo, prote, carbs, grasa, restricciones)
+        split = splits.get(dia, "Descanso activo")
+        tecnica = tecnicas_psico_rota[(dia - 1) % len(tecnicas_psico_rota)]
+        if animo is not None and animo <= 4:
+            rpe_max = "5-6"
+            entreno_txt = f"Sesión suave ({split}) — RPE máx {rpe_max}, 20-25 min"
+        elif es_entreno:
+            entreno_txt = f"{split} — RPE 7-8, 45-55 min"
+        else:
+            entreno_txt = "Descanso activo: 20-30 min caminata o movilidad"
+
+        plan_diario += (
+            f"\n**{nombre_dia} (Día {dia})**\n"
+            f"  🍽️ {menu.strip()}\n"
+            f"  💪 {entreno_txt}\n"
+            f"  🧠 {tecnica}\n"
+        )
+
+    if duracion > 7:
+        semanas = duracion // 7
+        plan_diario += f"\n\n> Semanas 2–{semanas}: repite el ciclo aumentando carga de entrenamiento en +5% cada semana y ajusta kcal según evolución del peso."
+
+    # ── CONTROL Y REVISIÓN ──────────────────────────────────────────────────
+    if duracion <= 7:
+        control = "\n\n### 📊 Control al final del plan\n- Peso y perímetro abdominal\n- Nivel de ánimo promedio (7 días)\n- Adherencia al entreno: sesiones completadas / sesiones planificadas\n- Si cualquier métrica empeora, dime y ajusto el plan."
+    elif duracion <= 14:
+        control = "\n\n### 📊 Control semanal\n**Semana 1:** registra peso, energía y ánimo diariamente.\n**Semana 2:** ajuste de carga (+5% entreno) y calorías si el peso no evoluciona como esperado."
+    else:
+        control = "\n\n### 📊 Control mensual\n- **Semana 1-2:** establecer hábitos base, no buscar resultados aún.\n- **Semana 3:** primera revisión: peso, adherencia, ánimo.\n- **Semana 4:** ajuste de macros y progresión de carga según datos.\n- Al mes, dime los resultados y genero el plan del mes siguiente."
+
+    # ── ALERTA CLÍNICA ───────────────────────────────────────────────────────
+    alertas = ""
+    if imc and imc >= 30:
+        alertas += "\n\n> ⚠️ **IMC elevado:** el entrenamiento es de bajo impacto hasta semana 3. Adapta la intensidad progresivamente."
+    if animo is not None and animo <= 3:
+        alertas += "\n\n> 🔴 **Ánimo muy bajo detectado:** Si persiste más de 2 semanas, considera derivación a psicología. La parte psicológica del plan es prioritaria esta semana."
+
+    return (
+        saludo
+        + datos_base
+        + nexo_texto
+        + plan_diario
+        + control
+        + alertas
     )
 
 
@@ -955,10 +1597,33 @@ def _respuesta_local_autonoma_gratis(
 
     texto = _normalizar_texto(mensaje_usuario)
     dominios = _detectar_dominios(texto)
+    dominio_seccion = _dominio_desde_seccion_activa(texto)
+    if dominio_seccion:
+        dominios = [dominio_seccion] + [dom for dom in dominios if dom != dominio_seccion]
     objetivo = _detectar_objetivo_principal(texto)
     objetivo = _objetivo_desde_contexto(objetivo, contexto_adicional)
     escenarios = _detectar_escenarios(texto)
     trastornos = _detectar_trastornos_probables(texto)
+
+    dominio_forzado = _dominio_forzado_por_input_corto(texto, contexto_adicional)
+    if dominio_forzado == "visual":
+        return (
+            "Perfecto, vamos con análisis visual.\n"
+            "Adjunta una imagen, vídeo o PDF y te doy observaciones concretas + correcciones accionables."
+        )
+    if dominio_forzado and dominio_forzado not in dominios:
+        dominios.insert(0, dominio_forzado)
+
+    if "integral" in texto and any(k in texto for k in ("porque", "por que")):
+        return (
+            "Lo llamo integral porque conecta nutrición, entrenamiento y salud mental en un único plan.\n"
+            "Si prefieres, te lo doy por separado por área o en versión mixta por semanas."
+        )
+
+    # 0. DERIVACIÓN: respuesta breve y directa sin análisis adicional
+    especialidad_derivacion = _es_solicitud_derivacion(texto)
+    if especialidad_derivacion:
+        return _respuesta_derivacion_breve(especialidad_derivacion, contexto_adicional)
 
     # Modo junta medica: respuesta extensa y tecnicamente estructurada.
     if _solicita_junta_medica(texto):
@@ -972,46 +1637,41 @@ def _respuesta_local_autonoma_gratis(
     if _es_mensaje_social_breve(texto):
         return _respuesta_social_contextual(mensaje_usuario, contexto_adicional, historial_chat)
 
-    # 2. PROTOCOLO CLÍNICO (Si hay patologías, priorizamos seguridad)
-    if trastornos:
-        return _protocolo_trastornos_multiambito(texto, contexto_adicional)
-
-    # 3. GENERACIÓN DE RESPUESTA TÉCNICA LOCAL (Si no hay IA, usamos el perfil del paciente)
-    peso = (contexto_adicional or {}).get("peso_actual_kg", "N/D")
-    imc = (contexto_adicional or {}).get("imc_actual", "N/D")
-    
+    # 2. SI PIDE PLAN DIRECTO, RESPONDER CON EL PLAN ANTES QUE CON MARCO CLÍNICO LARGO.
     # Decidimos el dominio prioritario para no ser ambiguos
     dominio_principal = dominios[0] if dominios else "general"
 
-    # RESPUESTA DE NUTRICIÓN LOCAL
-    if dominio_principal == "nutricion" or "dieta" in texto:
-        plan_base = _plan_nutricion_preciso(objetivo, contexto_adicional, escenarios)
-        return (
-            f"SISTEMA DE EMERGENCIA AURAFIT: Mi motor principal está saturado, pero aquí tienes tu prescripción técnica basada en tus {peso}kg:\n\n"
-            f"{plan_base}\n\n"
-            "⚠️ Nota: Esta es una estructura base. Vuelve a preguntarme en 1 minuto para generar el menú con ingredientes exóticos."
-        )
+    if _solicita_plan_accionable(texto):
+        if dominio_seccion == "nutricion":
+            return _plan_nutricion_preciso(objetivo, contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+        if dominio_seccion == "entrenamiento":
+            return _plan_entrenamiento_preciso(objetivo, contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+        if dominio_seccion == "salud_mental":
+            return _plan_psicologia_preciso(contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+        if _es_solicitud_integral(dominios, texto):
+            return _plan_integral_preciso(objetivo, contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+        if dominio_principal == "nutricion" or "dieta" in texto:
+            return _plan_nutricion_preciso(objetivo, contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+        if dominio_principal == "entrenamiento" or "rutina" in texto:
+            return _plan_entrenamiento_preciso(objetivo, contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+        if dominio_principal == "salud_mental" or "ansiedad" in texto or "estres" in texto:
+            return _plan_psicologia_preciso(contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
 
-    # RESPUESTA DE ENTRENAMIENTO LOCAL
-    if dominio_principal == "entrenamiento" or "rutina" in texto:
-        rutina_base = _plan_entrenamiento_preciso(objetivo, contexto_adicional, escenarios)
-        return (
-            f"SISTEMA DE EMERGENCIA AURAFIT: No puedo acceder a la nube de biomecánica, pero según tu perfil (IMC: {imc}) ejecuta esto:\n\n"
-            f"{rutina_base}\n\n"
-            "💪 Tip experto: Mantén un RPE 8 para asegurar hipertrofia sin quemar el SNC."
-        )
+    # 3. PROTOCOLO CLÍNICO (solo cuando de verdad hace falta ese marco)
+    if _requiere_protocolo_clinico(texto, trastornos):
+        return _protocolo_trastornos_multiambito(texto, contexto_adicional)
 
-    # RESPUESTA DE PSICOLOGÍA LOCAL
-    if dominio_principal == "salud_mental" or "ansiedad" in texto:
-        return (
-            "SISTEMA DE SEGURIDAD EMOCIONAL: Detecto necesidad de regulación inmediata.\n\n"
-            "1. Ejercicio Stop: Para lo que estés haciendo.\n"
-            "2. Respiración 4x4: Inhala 4s, mantén 4s, exhala 4s, mantén 4s. Repite 5 veces.\n"
-            "3. Foco técnico: Nombra 3 objetos azules que veas ahora mismo.\n\n"
-            "Dime cómo te sientes tras esto y activaré el protocolo de análisis profundo."
-        )
+    # 4. GENERACIÓN DE RESPUESTA TÉCNICA LOCAL
 
-    # 4. FALLBACK GENERAL EXPERTO
+    # PLAN INTEGRAL: si el usuario pide 2 o más áreas a la vez
+    if _es_solicitud_integral(dominios, texto):
+        return _plan_integral_preciso(objetivo, contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+
+    # RESPUESTA DIRECTA POR DOMINIO: no asumir plan completo salvo petición explícita.
+    if dominio_principal in {"nutricion", "entrenamiento", "salud_mental"}:
+        return _respuesta_orientativa_por_dominio(dominio_principal, mensaje_usuario, contexto_adicional)
+
+    # 5. FALLBACK GENERAL EXPERTO
     return _respuesta_experta_base(mensaje_usuario, contexto_adicional)
 
 def _preguntas_minimas_expertas(dominios: List[str], objetivo: str) -> str:
@@ -1166,6 +1826,104 @@ def _detectar_trastornos_probables(texto_normalizado: str) -> List[str]:
     return grupos
 
 
+def _solicita_plan_accionable(texto_normalizado: str) -> bool:
+    """Detecta peticiones donde el usuario quiere el plan directo y no un marco clínico largo."""
+    return any(
+        clave in texto_normalizado
+        for clave in (
+            "plan de",
+            "quiero un plan",
+            "dame un plan",
+            "hazme un plan",
+            "quiero una dieta",
+            "dame una dieta",
+            "hazme una dieta",
+            "quiero una rutina",
+            "dame una rutina",
+            "hazme una rutina",
+            "menu",
+            "semana por semana",
+            "plan diario",
+            "respuesta breve",
+            "accionable",
+            "sin relleno",
+            "incluye menu",
+        )
+    )
+
+
+def _respuesta_orientativa_por_dominio(
+    dominio_principal: str,
+    mensaje_usuario: str,
+    contexto_adicional: Optional[Dict[str, Any]],
+) -> str:
+    """Devuelve respuesta útil por dominio sin asumir que el usuario ya pidió un plan completo."""
+    contexto = _resumen_contexto(contexto_adicional)
+
+    if dominio_principal == "nutricion":
+        return (
+            f"Respuesta nutricional directa para tu consulta:\n"
+            f"- Contexto útil detectado: {contexto}.\n"
+            "- Te respondo a lo que has preguntado sin forzar una dieta completa.\n"
+            "- Si tu duda afecta hambre, horarios, digestión, saciedad o elección de comidas, la prioridad es resolver eso primero con una recomendación concreta y realista.\n\n"
+            "Si quieres, en el siguiente mensaje te preparo además una dieta adaptada a tus necesidades y horarios."
+        )
+
+    if dominio_principal == "entrenamiento":
+        return (
+            f"Respuesta de entrenamiento directa para tu consulta:\n"
+            f"- Contexto útil detectado: {contexto}.\n"
+            "- Te respondo a tu duda concreta sin convertirlo todavía en una rutina completa.\n"
+            "- La prioridad es aclarar ejecución, progresión, dolor, fatiga o frecuencia antes de ampliar el plan.\n\n"
+            "Si quieres, después te monto una rutina completa adaptada a tu nivel y días disponibles."
+        )
+
+    if dominio_principal == "salud_mental":
+        return (
+            f"Respuesta de salud mental directa para tu consulta:\n"
+            f"- Contexto útil detectado: {contexto}.\n"
+            "- Te respondo a la preocupación concreta sin asumir todavía que quieres una rutina psicológica completa.\n"
+            "- La prioridad es darte regulación útil ahora y luego, solo si quieres, estructurarlo en plan diario o semanal.\n\n"
+            "Si te encaja, después te preparo una rutina psicológica adaptada a tus necesidades."
+        )
+
+    accion = _siguiente_accion_autonoma(["general"], _detectar_objetivo_principal(_normalizar_texto(mensaje_usuario)))
+    return (
+        f"Respuesta directa: {contexto}.\n\n"
+        f"Siguiente acción útil: {accion}\n\n"
+        "Si quieres, después te lo convierto en plan completo por nutrición, entrenamiento o salud mental."
+    )
+
+
+def _requiere_protocolo_clinico(texto_normalizado: str, trastornos: List[str]) -> bool:
+    """Restringe el modo clínico largo a casos realmente clínicos o de riesgo."""
+    if not trastornos:
+        return False
+
+    claves_explicitamente_clinicas = (
+        "triage",
+        "diagnostico",
+        "medicacion",
+        "contraindic",
+        "precision maxima",
+        "alta precision",
+        "trastorno",
+        "lesion",
+        "dolor agudo",
+        "purga",
+        "ideas de dano",
+        "sincope",
+        "mareo",
+    )
+    if any(clave in texto_normalizado for clave in claves_explicitamente_clinicas):
+        return True
+
+    if _solicita_plan_accionable(texto_normalizado):
+        return False
+
+    return True
+
+
 def _protocolo_trastornos_multiambito(
     texto_normalizado: str,
     contexto_adicional: Optional[Dict[str, Any]],
@@ -1210,47 +1968,58 @@ def _respuesta_experta_base(
     mensaje_usuario: str,
     contexto_adicional: Optional[Dict[str, Any]],
 ) -> str:
-    """Plantilla de experto para consultas complejas con poca informacion."""
+    """Respuesta experta concisa adaptada al rol y al dominio detectado."""
     texto = _normalizar_texto(mensaje_usuario)
     dominios = _detectar_dominios(texto)
     objetivo = _detectar_objetivo_principal(texto)
     escenarios = _detectar_escenarios(texto)
     rol = _rol_especialista(contexto_adicional)
-    enfoque_rol = _enfoque_por_rol(rol)
-    funcionalidades_rol = _funcionalidades_por_rol(rol)
-    workflow_rol = _workflow_operativo_por_rol(rol)
-    diagnostico = _diagnostico_diferencial_experto(objetivo, dominios, escenarios)
-    plan_72h = _plan_72h_experto(objetivo, dominios, escenarios, contexto_adicional)
-    plan_diario = _plan_diario_experto(objetivo, dominios)
     trastornos_probables = _detectar_trastornos_probables(texto)
 
-    if trastornos_probables:
+    dominio_forzado = _dominio_forzado_por_input_corto(texto, contexto_adicional)
+    if dominio_forzado == "visual":
         return (
-            f"Nivel ultra experto activado.\n"
-            f"{_protocolo_trastornos_multiambito(texto, contexto_adicional)}\n"
-            f"Marco experto:\n- {enfoque_rol}\n\n"
-            f"{funcionalidades_rol}\n"
-            f"{workflow_rol}\n"
-            f"{_plan_experto_semanal(objetivo, escenarios, dominios, contexto_adicional)}\n\n"
-            f"{_matriz_decision_experta(objetivo, dominios, escenarios)}\n\n"
-            f"{_planes_contingencia_expertos(objetivo, dominios)}"
+            "Perfecto, análisis visual activado.\n"
+            "Adjunta imagen, vídeo o PDF y te doy feedback técnico directo."
+        )
+    if dominio_forzado and dominio_forzado not in dominios:
+        dominios.insert(0, dominio_forzado)
+
+    if "integral" in texto and any(k in texto for k in ("porque", "por que")):
+        return (
+            "Integral significa que el plan no separa áreas: une comida, entreno y regulación emocional para que no se contradigan.\n"
+            "Si quieres, ahora mismo te lo convierto en: 1) solo nutrición, 2) solo entreno, 3) solo salud mental."
         )
 
+    if trastornos_probables:
+        return _protocolo_trastornos_multiambito(texto, contexto_adicional)
+
+    # Para profesionales: respuesta clínica concisa
+    if rol in ("nutricionista", "psicologo", "coach", "medico"):
+        return (
+            f"{_enfoque_por_rol(rol)}\n\n"
+            f"{_workflow_operativo_por_rol(rol)}\n"
+            f"Objetivo detectado: {objetivo}. Dominios: {', '.join(dominios) if dominios else 'general'}.\n"
+            f"{_resumen_contexto(contexto_adicional)}"
+        )
+
+    # Para pacientes: plan accionable directo según dominio
+    dominio_principal = dominios[0] if dominios else "general"
+
+    # PLAN INTEGRAL: si el usuario pide 2 o más áreas a la vez
+    if _es_solicitud_integral(dominios, texto):
+        return _plan_integral_preciso(objetivo, contexto_adicional, escenarios, texto_usuario=mensaje_usuario)
+
+    if dominio_principal in {"nutricion", "entrenamiento", "salud_mental"}:
+        return _respuesta_orientativa_por_dominio(dominio_principal, mensaje_usuario, contexto_adicional)
+
+    # Fallback general: resumen conciso + acción inmediata
+    accion = _siguiente_accion_autonoma(dominios or ["general"], objetivo)
     return (
-        f"Nivel ultra experto activado.\n"
-        f"{_bloques_avanzados_multiambito(dominios or ['nutricion', 'entrenamiento'], objetivo, contexto_adicional)}\n\n"
-        f"Marco experto:\n- {enfoque_rol}\n\n"
-        f"{funcionalidades_rol}\n"
-        f"{workflow_rol}\n"
-        f"Hipotesis de trabajo:\n- El problema principal es {objetivo} y requiere ejecucion disciplinada, no solo motivacion.\n"
-        f"- El sistema debe proteger adherencia, energia y estabilidad emocional antes de aumentar la exigencia.\n\n"
-        f"{diagnostico}\n\n"
-        f"{_plan_experto_semanal(objetivo, escenarios, dominios, contexto_adicional)}\n\n"
-        f"{plan_72h}\n\n"
-        f"{plan_diario}\n\n"
-        f"{_matriz_decision_experta(objetivo, dominios, escenarios)}\n\n"
-        f"{_planes_contingencia_expertos(objetivo, dominios)}\n\n"
-        f"{_preguntas_minimas_expertas(dominios, objetivo)}"
+        f"Diagnóstico rápido: objetivo {objetivo}.\n"
+        f"{_resumen_contexto(contexto_adicional)}\n\n"
+        f"Acción inmediata: {accion}\n\n"
+        "Dime qué necesitas exactamente (dieta, rutina, regulación emocional o análisis de imagen) y lo resuelvo ahora."
     )
 
 
@@ -1450,6 +2219,15 @@ def _normalizar_texto(texto: str) -> str:
     return " ".join(texto_sin_acentos.split())
 
 
+def _texto_usuario_para_alerta(mensaje_usuario: str) -> str:
+    """Usa solo la consulta del usuario para alerta de riesgo, no el texto técnico inyectado."""
+    marcador = "[TEXTO EXTRAIDO AUTOMATICAMENTE DE PDF ADJUNTO]"
+    if marcador in (mensaje_usuario or ""):
+        limpio, _, _ = (mensaje_usuario or "").partition(marcador)
+        return limpio.strip()
+    return (mensaje_usuario or "").strip()
+
+
 def _extraer_texto_historial(item: Dict[str, Any]) -> str:
     """Obtiene texto de una entrada del historial con varias claves compatibles."""
     texto = item.get("mensaje") or item.get("content") or item.get("texto") or ""
@@ -1474,7 +2252,11 @@ def _preparar_partes_imagenes(imagenes: Optional[List[Dict[str, Any]]]) -> List[
 
         data = imagen.get("data")
         mime_type = str(imagen.get("mime_type") or imagen.get("mimeType") or "image/jpeg").strip().lower()
-        if not (mime_type.startswith("image/") or mime_type.startswith("video/")):
+        if not (
+            mime_type.startswith("image/")
+            or mime_type.startswith("video/")
+            or mime_type == "application/pdf"
+        ):
             continue
 
         # Formato esperado para Gemini: {"mime_type": "image/jpeg", "data": bytes}
@@ -1511,7 +2293,7 @@ def detectar_alerta_riesgo(
 ) -> bool:
     """Detecta riesgo por mensaje actual para evitar falsos positivos por historial antiguo."""
     _ = historial_chat  # Se mantiene firma para compatibilidad.
-    texto_actual = _normalizar_texto(mensaje_usuario or "")
+    texto_actual = _normalizar_texto(_texto_usuario_para_alerta(mensaje_usuario))
     return any(palabra in texto_actual for palabra in PALABRAS_RIESGO)
 
 
@@ -1527,10 +2309,14 @@ def _proveedor_ia_actual(provider_override: Optional[str] = None) -> str:
     """Devuelve el proveedor configurado para la IA principal."""
     proveedor = (provider_override or settings.IA_PROVIDER or "gemini").strip().lower()
     proveedor = proveedor or "gemini"
-    if proveedor not in {"gemini", "qwen", "qwen3"}:
+    aliases = {
+        "qwen3": "qwen",
+        "ollama": "qwen",
+        "openai-compatible": "qwen",
+    }
+    proveedor = aliases.get(proveedor, proveedor)
+    if proveedor not in {"gemini", "qwen"}:
         return "gemini"
-    if proveedor == "qwen3":
-        return "qwen"
     return proveedor
 
 
@@ -1550,8 +2336,17 @@ def _configuracion_qwen() -> Dict[str, str]:
     api_key = settings.QWEN_API_KEY or os.getenv("QWEN_API_KEY", "")
     base_url = (settings.QWEN_BASE_URL or os.getenv("QWEN_BASE_URL", "")).rstrip("/")
     model = settings.QWEN_MODEL or os.getenv("QWEN_MODEL", "qwen3-32b-instruct")
+    base_url_norm = base_url.lower()
+    es_backend_local = any(
+        host in base_url_norm
+        for host in (
+            "http://localhost",
+            "http://127.0.0.1",
+            "http://host.docker.internal",
+        )
+    )
 
-    if not api_key:
+    if not api_key and not es_backend_local:
         raise RuntimeError("No se encontro QWEN_API_KEY en el entorno")
     if not base_url:
         raise RuntimeError("No se encontro QWEN_BASE_URL en el entorno")
@@ -1685,9 +2480,10 @@ def _consultar_qwen(
     }
 
     headers = {
-        "Authorization": f"Bearer {config['api_key']}",
         "Content-Type": "application/json",
     }
+    if config["api_key"]:
+        headers["Authorization"] = f"Bearer {config['api_key']}"
 
     respuesta = httpx.post(
         f"{config['base_url']}/chat/completions",
@@ -1773,8 +2569,240 @@ def _es_error_cuota_o_modelo(error: Exception) -> bool:
     )
 
 
-def _analisis_visual_local(imagenes: Optional[List[Dict[str, Any]]]) -> str:
-    """Genera un analisis visual local basico cuando no hay vision externa disponible."""
+def _extraer_texto_pdf_inyectado(mensaje_usuario: str) -> str:
+    """Recupera el texto de PDF que main.py ya inyecta en el mensaje antes del fallback."""
+    marcador = "[TEXTO EXTRAIDO AUTOMATICAMENTE DE PDF ADJUNTO]"
+    if marcador not in (mensaje_usuario or ""):
+        return ""
+    _, _, resto = mensaje_usuario.partition(marcador)
+    return resto.strip()
+
+
+def _mensaje_sin_bloque_pdf(mensaje_usuario: str) -> str:
+    """Elimina el bloque técnico de texto PDF para quedarnos con la consulta original."""
+    marcador = "[TEXTO EXTRAIDO AUTOMATICAMENTE DE PDF ADJUNTO]"
+    if marcador not in (mensaje_usuario or ""):
+        return (mensaje_usuario or "").strip()
+    limpio, _, _ = mensaje_usuario.partition(marcador)
+    return limpio.strip()
+
+
+def _resumen_texto_plano(texto: str, max_fragmentos: int = 3, max_chars: int = 520) -> str:
+    """Genera un resumen corto y estable a partir de texto plano ya extraído."""
+    fragmentos: List[str] = []
+    acumulado = 0
+
+    candidatos = [
+        linea.strip(" -•\t")
+        for linea in re.split(r"[\n\r]+", texto or "")
+        if linea and linea.strip()
+    ]
+    if not candidatos:
+        candidatos = [
+            frag.strip()
+            for frag in re.split(r"(?<=[\.!?])\s+", texto or "")
+            if frag and frag.strip()
+        ]
+
+    for candidato in candidatos:
+        if len(candidato) < 20:
+            continue
+        if candidato.lower().startswith("pagina "):
+            continue
+        disponible = max_chars - acumulado
+        if disponible <= 0:
+            break
+        recorte = candidato[:disponible].strip()
+        if len(recorte) < 20:
+            continue
+        fragmentos.append(recorte)
+        acumulado += len(recorte)
+        if len(fragmentos) >= max_fragmentos:
+            break
+
+    return "\n".join(f"- {frag}" for frag in fragmentos)
+
+
+def _consulta_pide_leer_contenido(mensaje_usuario: str) -> bool:
+    """Detecta si el usuario quiere leer/extraer contenido del adjunto."""
+    texto = _normalizar_texto((mensaje_usuario or "").strip())
+    if not texto:
+        return False
+    return any(
+        clave in texto
+        for clave in (
+            "que hay",
+            "que pone",
+            "que dice",
+            "leer",
+            "lee",
+            "texto",
+            "contenido",
+            "analiza",
+            "adjunto",
+            "imagen",
+            "captura",
+        )
+    )
+
+
+def _clasificar_documento_general(texto: str) -> str:
+    """Clasifica el tipo de documento de forma simple para respuestas genéricas."""
+    t = _normalizar_texto(texto)
+    reglas = (
+        ("documento de contratacion", ("contrato", "contratacion", "arrendamiento", "firmante", "clausula", "vigencia")),
+        ("documento de anulación o cancelación", ("anulacion", "cancelacion", "revocacion", "rescision", "deja sin efecto")),
+        ("documento administrativo", ("solicitud", "expediente", "resolucion", "administracion", "tramite")),
+        ("factura o documento de cobro", ("factura", "iva", "subtotal", "total", "base imponible")),
+        ("rutina de entrenamiento", ("series", "repeticiones", "entrenamiento", "rutina", "descanso", "ejercicio")),
+        ("plan nutricional", ("calorias", "proteinas", "hidratos", "grasas", "menu", "comida")),
+    )
+    for etiqueta, claves in reglas:
+        if any(clave in t for clave in claves):
+            return etiqueta
+    return "documento general"
+
+
+def _analisis_documental_generico(texto: str, consulta: str, origen: str) -> str:
+    """Devuelve un análisis neutro para cualquier documento, sea o no de salud."""
+    tipo = _clasificar_documento_general(texto)
+    resumen = _resumen_texto_plano(texto, max_fragmentos=4, max_chars=700)
+    titulo = "He leído el PDF adjunto." if origen == "pdf" else "He leído el texto de la imagen adjunta."
+    consulta_norm = _normalizar_texto(consulta)
+
+    if not resumen:
+        return (
+            f"{titulo} Parece un {tipo}, pero no he podido extraer fragmentos suficientes para resumirlo mejor. "
+            "Si quieres, te digo exactamente qué parte revisar si me indicas página o bloque concreto."
+        )
+
+    if any(k in consulta_norm for k in ("que es", "de que trata", "analiza", "lee", "resume", "resumen", "que pone", "que dice", "documento")):
+        return (
+            f"{titulo} Esto parece un {tipo}.\n"
+            "Resumen de contenido detectado:\n"
+            f"{resumen}\n\n"
+            "Si quieres, te lo explico en lenguaje más simple o te extraigo los puntos legales/técnicos clave."
+        )
+
+    return (
+        f"{titulo} He detectado que es un {tipo}.\n"
+        f"Fragmentos clave:\n{resumen}"
+    )
+
+
+def _extraer_texto_ocr_local(data: bytes) -> str:
+    """Intenta OCR local de imágenes cuando el proveedor multimodal no está disponible."""
+    try:
+        pytesseract = importlib.import_module("pytesseract")
+    except Exception:
+        return ""
+
+    try:
+        img = Image.open(BytesIO(bytes(data)))
+        img.load()
+        if img.mode not in {"RGB", "RGBA", "L"}:
+            img = img.convert("RGB")
+
+        base = img.convert("L")
+        variantes = [
+            base,
+            ImageOps.autocontrast(base),
+            base.point(lambda px: 255 if px > 165 else 0),
+            ImageOps.autocontrast(base).resize((max(1, base.width * 2), max(1, base.height * 2))),
+        ]
+        configuraciones = (
+            "--oem 3 --psm 6",
+            "--oem 3 --psm 11",
+            "--oem 3 --psm 4",
+        )
+
+        mejor_texto = ""
+        mejor_puntaje = 0
+
+        for variante in variantes:
+            for config in configuraciones:
+                try:
+                    candidato = pytesseract.image_to_string(variante, lang="spa+eng", config=config)
+                except Exception:
+                    continue
+                candidato_limpio = " ".join((candidato or "").split()).strip()
+                if not candidato_limpio:
+                    continue
+                puntaje = sum(1 for ch in candidato_limpio if ch.isalnum())
+                if puntaje > mejor_puntaje:
+                    mejor_puntaje = puntaje
+                    mejor_texto = candidato_limpio
+    except Exception:
+        return ""
+
+    return mejor_texto if mejor_puntaje >= 6 else ""
+
+
+def _respuesta_local_desde_texto_extraido(
+    mensaje_usuario: str,
+    texto_extraido: str,
+    contexto_adicional: Optional[Dict[str, Any]] = None,
+    historial_chat: Optional[List[Dict[str, Any]]] = None,
+    origen: str = "documento",
+) -> str:
+    """Reutiliza texto extraído localmente para responder sin depender de visión externa."""
+    consulta = _mensaje_sin_bloque_pdf(mensaje_usuario)
+    consulta_norm = _normalizar_texto(consulta)
+    texto_limpio = " ".join((texto_extraido or "").split()).strip()
+
+    if not texto_limpio:
+        if origen == "pdf":
+            return (
+                "He recibido el PDF, pero no he podido sacar texto legible del archivo. "
+                "Si es un PDF escaneado o una foto incrustada, vuelve a enviarlo con más nitidez y lo intento de nuevo."
+            )
+        return (
+            "He recibido la imagen, pero no he podido extraer texto legible en local. "
+            "Si es una captura con texto pequeño, envíala con más resolución y la reviso otra vez."
+        )
+
+    if any(
+        clave in consulta_norm
+        for clave in (
+            "resume",
+            "resumen",
+            "que pone",
+            "que dice",
+            "que hay",
+            "leer",
+            "lee",
+            "contenido",
+            "explica",
+        )
+    ) or len(consulta_norm) < 18:
+        return _analisis_documental_generico(texto_limpio, consulta, origen)
+
+    if origen in {"pdf", "imagen"} and any(
+        k in consulta_norm
+        for k in ("documento", "archivo", "contrato", "anulacion", "cancelacion", "factura", "pdf", "imagen")
+    ):
+        return _analisis_documental_generico(texto_limpio, consulta, origen)
+
+    prompt_enriquecido = (
+        f"{consulta or 'Analiza el contenido adjunto y dime lo importante.'}\n\n"
+        f"Contenido extraído del {origen}:\n{texto_limpio[:4000]}"
+    )
+    respuesta = _respuesta_local_autonoma_gratis(
+        mensaje_usuario=prompt_enriquecido,
+        contexto_adicional=contexto_adicional,
+        historial_chat=historial_chat,
+    ).strip()
+    prefijo = "He leído el PDF adjunto." if origen == "pdf" else "He leído el texto visible de la imagen adjunta."
+    return f"{prefijo}\n{respuesta}" if respuesta else prefijo
+
+
+def _analisis_visual_local(
+    mensaje_usuario: str,
+    imagenes: Optional[List[Dict[str, Any]]],
+    contexto_adicional: Optional[Dict[str, Any]] = None,
+    historial_chat: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Genera una respuesta local útil cuando no hay visión externa disponible."""
     if not imagenes:
         return (
             "No tengo adjuntos validos para analizar ahora mismo. "
@@ -1790,6 +2818,15 @@ def _analisis_visual_local(imagenes: Optional[List[Dict[str, Any]]]) -> str:
             "He recibido un video. En este entorno local no puedo extraer fotogramas automaticamente, "
             "pero si me dices el segundo exacto o el gesto tecnico que quieres revisar, "
             "te doy el checklist de tecnica paso a paso y como corregirlo."
+        )
+
+    if mime == "application/pdf":
+        return _respuesta_local_desde_texto_extraido(
+            mensaje_usuario=mensaje_usuario,
+            texto_extraido=_extraer_texto_pdf_inyectado(mensaje_usuario),
+            contexto_adicional=contexto_adicional,
+            historial_chat=historial_chat,
+            origen="pdf",
         )
 
     if not mime.startswith("image/"):
@@ -1809,6 +2846,22 @@ def _analisis_visual_local(imagenes: Optional[List[Dict[str, Any]]]) -> str:
         img.load()
         width, height = img.size
         mode = (img.mode or "?").upper()
+        texto_ocr = _extraer_texto_ocr_local(bytes(data))
+
+        if len(texto_ocr) >= 8:
+            return _respuesta_local_desde_texto_extraido(
+                mensaje_usuario=mensaje_usuario,
+                texto_extraido=texto_ocr,
+                contexto_adicional=contexto_adicional,
+                historial_chat=historial_chat,
+                origen="imagen",
+            )
+
+        if _consulta_pide_leer_contenido(mensaje_usuario):
+            return (
+                "He recibido la imagen, pero en este intento no he podido leer texto suficiente con OCR local. "
+                "Prueba a reenviarla con más contraste (fondo claro, letra más grande) y la analizo de nuevo para decirte exactamente qué pone."
+            )
 
         # Medidas visuales simples y estables para orientar al usuario.
         gray = img.convert("L")
@@ -1857,7 +2910,12 @@ def _respuesta_local_gratis(
         )
 
     if tiene_multimedia:
-        return _analisis_visual_local(imagenes)
+        return _analisis_visual_local(
+            mensaje_usuario=mensaje_usuario,
+            imagenes=imagenes,
+            contexto_adicional=contexto_adicional,
+            historial_chat=historial_chat,
+        )
 
     # En fallback local, siempre devolvemos respuesta util y específica.
     return _respuesta_local_autonoma_gratis(
@@ -1926,7 +2984,23 @@ def _construir_contenido(
 
     # 3. MENSAJE ACTUAL + MULTIMEDIA (Input de ejecución)
     # Si hay imágenes/video, Gemini las procesará junto con el texto del usuario
-    partes_mensaje: List[Any] = [mensaje_usuario]
+    # IMPORTANTE: Agregamos instrucción explícita de análisis visual si hay imágenes
+    partes_mensaje: List[Any] = []
+    
+    # Si hay imágenes, añadir instrucción de análisis visual primero
+    if imagenes:
+        # Agregar instrucción de análisis visual ANTES de las imágenes
+        instruccion_visual = (
+            "ANALIZA VISUALMENTE lo que ves en las imágenes adjuntas. "
+            "Describe claramente: tipo de imagen, contenido visible, objetos, texto, gráficos, código, personas, etc. "
+            "Luego extrae cualquier OCR si es necesario y proporciona un resumen útil completo."
+        )
+        partes_mensaje.append(instruccion_visual)
+    
+    # Agregar el mensaje del usuario
+    partes_mensaje.append(mensaje_usuario)
+    
+    # Agregar las imágenes/multimedia
     partes_mensaje.extend(_preparar_partes_imagenes(imagenes))
     
     contenido.append({"role": "user", "parts": partes_mensaje})
@@ -2064,6 +3138,18 @@ def consultar_ia(
 
     alerta_riesgo = detectar_alerta_riesgo(mensaje_usuario, historial_chat)
     etiqueta_alerta = ETIQUETA_ALERTA_RIESGO if alerta_riesgo else None
+
+    # Interceptar derivaciones: respuesta breve local sin llamar al proveedor de IA
+    _texto_norm_ia = _normalizar_texto(mensaje_usuario)
+    _esp_derivacion = _es_solicitud_derivacion(_texto_norm_ia)
+    if _esp_derivacion:
+        return {
+            "respuesta": _respuesta_derivacion_breve(_esp_derivacion, contexto_adicional),
+            "etiqueta_alerta": None,
+            "alerta_riesgo": False,
+            "modelo": "local_derivacion",
+            "origen": "local",
+        }
 
     def _aplicar_validacion(resultado: Dict[str, Any]) -> Dict[str, Any]:
         """Envuelve un resultado con validación de pertinencia."""

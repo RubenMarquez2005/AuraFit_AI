@@ -2,6 +2,8 @@
 
 from datetime import time, datetime, timedelta
 import base64
+from io import BytesIO
+import importlib
 from typing import Any, Dict, List, Optional
 import json
 import re
@@ -33,11 +35,12 @@ from app.models import (
     ChecklistClinicoPaciente,
     ChecklistClinicoHistorial,
     RecursoClinico,
+    PlanIA,
 )
 from app.api.auth import router as auth_router
 from app.services.auth_service import obtener_usuario_por_token, generar_hash_contrasena
 from services.chat_router import debe_priorizar_rasa, es_intento_rasa_confiable
-from services.gemini_service import consultar_ia, obtener_respuesta_local_segura
+from services.gemini_service import consultar_ia, obtener_respuesta_local_segura, _detectar_duracion_plan
 from services.media_generation_service import generar_imagen_premium, generar_video_premium
 from services.rasa_service import analizar_mensaje_con_rasa, enviar_mensaje_a_rasa
 import logging
@@ -887,6 +890,7 @@ _ = (
     ChecklistClinicoPaciente,
     ChecklistClinicoHistorial,
     RecursoClinico,
+    PlanIA,
 )
 
 # Inicializa la aplicacion FastAPI
@@ -921,6 +925,7 @@ async def startup_event():
         Base.metadata.create_all(bind=engine)
         _asegurar_columna_cambio_contrasena()
         _asegurar_columna_activos_premium_chat()
+        _asegurar_columnas_conversaciones_chat()
         _asegurar_columnas_perfil_plan_diario()
         with Session(bind=engine) as db:
             _asegurar_roles_base(db)
@@ -1110,7 +1115,7 @@ class ChatRequest(BaseModel):
     sender: str = Field(default="aurafit_user", min_length=1, description="ID único del usuario")
     adjuntos: List[Dict[str, Any]] = Field(
         default_factory=list,
-        description="Fotos o videos codificados en base64 para análisis multimodal",
+        description="Imágenes, videos o PDF codificados en base64 para análisis multimodal",
     )
     provider: Optional[str] = Field(
         default=None,
@@ -1119,6 +1124,10 @@ class ChatRequest(BaseModel):
     model: Optional[str] = Field(
         default=None,
         description="Modelo opcional por solicitud para el proveedor seleccionado",
+    )
+    conversation_id: Optional[str] = Field(
+        default=None,
+        description="Identificador opcional de la conversación activa",
     )
 
 
@@ -1146,6 +1155,7 @@ class ChatResponse(BaseModel):
     memoria_tema: Optional[str] = None
     pregunta_actual: Optional[str] = None
     respuestas_memoria: Dict[str, Any] = Field(default_factory=dict)
+    conversation_id: Optional[str] = None
 
 
 class ChatProviderUpdateRequest(BaseModel):
@@ -1160,6 +1170,13 @@ class ChatProviderResponse(BaseModel):
     ok: bool
     provider: str
     supported_providers: List[str] = Field(default_factory=lambda: ["gemini", "qwen"])
+
+
+class ChatConversationUpdateRequest(BaseModel):
+    """Permite renombrar o fijar una conversación."""
+
+    titulo: Optional[str] = Field(default=None, max_length=160)
+    fijada: Optional[bool] = None
 
 
 _RASA_RESPUESTAS_GENERICAS = (
@@ -1365,7 +1382,11 @@ def _normalizar_adjuntos_chat(adjuntos: Optional[List[Dict[str, Any]]]) -> List[
         if not mime_type:
             mime_type = "image/jpeg"
 
-        if not (mime_type.startswith("image/") or mime_type.startswith("video/")):
+        if not (
+            mime_type.startswith("image/")
+            or mime_type.startswith("video/")
+            or mime_type == "application/pdf"
+        ):
             logger.warning("Adjunto descartado por MIME no soportado: %s", mime_type)
             continue
 
@@ -1380,6 +1401,143 @@ def _normalizar_adjuntos_chat(adjuntos: Optional[List[Dict[str, Any]]]) -> List[
         partes.append({"mime_type": mime_type, "data": data_bytes})
 
     return partes
+
+
+def _extraer_texto_pdf_adjuntos(
+    adjuntos: Optional[List[Dict[str, Any]]],
+    max_paginas_por_pdf: int = 12,
+    max_caracteres_totales: int = 12000,
+) -> str:
+    """Extrae texto de PDFs adjuntos para enriquecer el análisis IA automáticamente."""
+    if not adjuntos:
+        return ""
+
+    try:
+        pypdf_module = importlib.import_module("pypdf")
+        pdf_reader_cls = getattr(pypdf_module, "PdfReader")
+    except Exception:
+        logger.info("pypdf no disponible; se omite extracción automática de texto en PDF")
+        return ""
+
+    def _ocr_texto_desde_imagen_bytes(data: bytes) -> str:
+        try:
+            pytesseract = importlib.import_module("pytesseract")
+            pil_image = importlib.import_module("PIL.Image")
+            pil_ops = importlib.import_module("PIL.ImageOps")
+        except Exception:
+            return ""
+
+        try:
+            img = pil_image.open(BytesIO(bytes(data)))
+            img.load()
+            if getattr(img, "mode", "RGB") not in {"RGB", "RGBA", "L"}:
+                img = img.convert("RGB")
+            base = img.convert("L")
+            variantes = [
+                base,
+                pil_ops.autocontrast(base),
+                base.point(lambda px: 255 if px > 165 else 0),
+                pil_ops.autocontrast(base).resize((max(1, base.width * 2), max(1, base.height * 2))),
+            ]
+            configuraciones = ("--oem 3 --psm 6", "--oem 3 --psm 11", "--oem 3 --psm 4")
+            mejor = ""
+            puntaje_mejor = 0
+            for variante in variantes:
+                for config in configuraciones:
+                    try:
+                        candidato = pytesseract.image_to_string(variante, lang="spa+eng", config=config)
+                    except Exception:
+                        continue
+                    limpio = " ".join((candidato or "").split()).strip()
+                    puntaje = sum(1 for ch in limpio if ch.isalnum())
+                    if puntaje > puntaje_mejor:
+                        puntaje_mejor = puntaje
+                        mejor = limpio
+            return mejor if puntaje_mejor >= 6 else ""
+        except Exception:
+            return ""
+
+    def _extraer_texto_pdf_ocr_local(data: bytes, max_paginas: int = 6) -> str:
+        try:
+            fitz = importlib.import_module("fitz")
+        except Exception:
+            return ""
+
+        try:
+            documento = fitz.open(stream=bytes(data), filetype="pdf")
+        except Exception:
+            return ""
+
+        bloques: List[str] = []
+        total_local = 0
+        try:
+            limite_paginas = min(len(documento), max_paginas)
+            for indice in range(limite_paginas):
+                if total_local >= max_caracteres_totales:
+                    break
+                pagina = documento.load_page(indice)
+                pix = pagina.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                texto_ocr = _ocr_texto_desde_imagen_bytes(pix.tobytes("png"))
+                if not texto_ocr:
+                    continue
+                restante = max_caracteres_totales - total_local
+                bloque = texto_ocr[:restante]
+                bloques.append(bloque)
+                total_local += len(bloque)
+        finally:
+            documento.close()
+
+        return "\n\n".join(bloques).strip()
+
+    fragmentos: List[str] = []
+    total = 0
+
+    for adjunto in adjuntos:
+        if not isinstance(adjunto, dict):
+            continue
+        if str(adjunto.get("mime_type") or "").lower() != "application/pdf":
+            continue
+
+        data = adjunto.get("data")
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            continue
+
+        try:
+            reader = pdf_reader_cls(BytesIO(bytes(data)))
+        except Exception:
+            logger.warning("No se pudo abrir un PDF adjunto para extracción automática de texto")
+            continue
+
+        paginas = reader.pages[:max_paginas_por_pdf]
+        extraido_en_pdf = False
+        for pagina in paginas:
+            if total >= max_caracteres_totales:
+                break
+            try:
+                texto = (pagina.extract_text() or "").strip()
+            except Exception:
+                texto = ""
+            if not texto:
+                continue
+
+            espacio = max_caracteres_totales - total
+            bloque = texto[:espacio]
+            fragmentos.append(bloque)
+            total += len(bloque)
+            extraido_en_pdf = True
+
+        if not extraido_en_pdf and total < max_caracteres_totales:
+            texto_ocr = _extraer_texto_pdf_ocr_local(bytes(data), max_paginas=max_paginas_por_pdf)
+            if texto_ocr:
+                espacio = max_caracteres_totales - total
+                bloque = texto_ocr[:espacio]
+                fragmentos.append(bloque)
+                total += len(bloque)
+
+        if total >= max_caracteres_totales:
+            break
+
+    return "\n\n".join(fragmentos).strip()
 
 
 def _es_respuesta_rasa_generica(texto: str) -> bool:
@@ -1403,6 +1561,76 @@ def _normalizar_ascii(texto: str) -> str:
         for ch in unicodedata.normalize("NFKD", base)
         if not unicodedata.combining(ch)
     )
+
+
+def _auto_guardar_plan_ia(
+    db: Session,
+    usuario_id: int,
+    tipo: str,
+    mensaje_usuario: str,
+    respuesta: str,
+    contexto: dict,
+) -> None:
+    """
+    Detecta si la respuesta de la IA contiene un plan completo y lo persiste
+    automáticamente en la tabla planes_ia.
+    Más permisivo con psicología: puede guardarse con menos estructura.
+    """
+    indicadores = {
+        "nutricion": ["kcal", "proteína", "carboh", "desayuno", "almuerzo", "cena", "macros"],
+        "entrenamiento": ["series", "reps", "rpe", "ejercicio", "entrenamiento", "descanso"],
+        "psicologia": ["técnica", "respiración", "mindfulness", "emoción", "tcc", "act", "emocional", "día 1", "dia 1", "semana", "ansiedad", "estres", "relaxacion", "meditacion"],
+    }
+    palabras_clave = indicadores.get(tipo, [])
+    respuesta_lower = respuesta.lower()
+
+    coincidencias = sum(1 for p in palabras_clave if p in respuesta_lower)
+    encabezados = respuesta.count("##") + respuesta.count("###")
+    tiene_tabla = "|" in respuesta and "---" in respuesta
+    tiene_bloques_dias = any(k in respuesta_lower for k in ("día 1", "dia 1", "semana 1", "lunes", "martes"))
+    tiene_estructura = encabezados >= 2 or tiene_tabla or tiene_bloques_dias
+    longitud_respuesta = len(respuesta)
+    
+    # Requisitos flexibles por tipo
+    es_psicologia = tipo == "psicologia"
+    
+    # Criterios de guardado:
+    # - Nutrición: requiere 2+ palabras clave AND estructura
+    # - Entrenamiento: requiere 2+ palabras clave AND estructura
+    # - Psicología: requiere 1+ palabra clave Y respuesta decente (>200 chars)
+    
+    if es_psicologia:
+        # Psicología es más flexible: puede guardarse sin estructura estricta
+        if coincidencias < 1 or longitud_respuesta < 200:
+            return  # No tiene suficiente contenido
+    else:
+        # Nutrición y entrenamiento requieren más estructura
+        if coincidencias < 2 or not tiene_estructura:
+            return  # No tiene estructura mínima
+
+    duracion_dias = _detectar_duracion_plan(mensaje_usuario)
+    objetivo = contexto.get("objetivo_principal") or None
+    ahora = datetime.utcnow()
+
+    # Desactivar plan activo previo del mismo tipo
+    db.query(PlanIA).filter(
+        PlanIA.usuario_id == usuario_id,
+        PlanIA.tipo == tipo,
+        PlanIA.activo == True,  # noqa: E712
+    ).update({"activo": False})
+
+    plan = PlanIA(
+        usuario_id=usuario_id,
+        tipo=tipo,
+        objetivo=objetivo,
+        contenido=respuesta,
+        duracion_dias=duracion_dias,
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=duracion_dias),
+        activo=True,
+    )
+    db.add(plan)
+    db.commit()
 
 
 def _debe_priorizar_ia_avanzada(mensaje: str) -> bool:
@@ -1440,9 +1668,10 @@ def _detectar_area_chat(texto: str) -> str:
         return "especialista"
     if any(k in t for k in ("dieta", "menu", "celia", "alerg", "intoler", "comida", "nutric")):
         return "dieta"
-    if any(k in t for k in ("entren", "rutina", "ejercicio", "gym", "fuerza", "cardio")):
+    # Mejor detección de entrenamiento vs psicología para evitar conflictos
+    if any(k in t for k in ("entren", "ejercicio", "gym", "fuerza", "cardio", "musculo", "peso", "flexiones")):
         return "entrenamiento"
-    if any(k in t for k in ("ansiedad", "depres", "estres", "psicol", "emocion", "insomnio")):
+    if any(k in t for k in ("ansiedad", "depres", "estres", "psicol", "emocion", "insomnio", "rutina psicol", "rutina mental", "salud mental", "mindfulness", "respir", "tecnica")):
         return "psicologia"
     return "general"
 
@@ -1905,16 +2134,14 @@ def _es_solicitud_experta(mensaje: str) -> bool:
 def _historial_para_consulta_ia(
     db: Session,
     usuario_id: int,
+    conversation_id: Optional[str] = None,
     limit: int = 8,
 ) -> List[Dict[str, str]]:
     """Prepara historial reciente de chat para mejorar continuidad de respuesta IA."""
-    mensajes = (
-        db.query(MensajeChat)
-        .filter(MensajeChat.usuario_id == usuario_id)
-        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
-        .limit(limit)
-        .all()
-    )
+    query = db.query(MensajeChat).filter(MensajeChat.usuario_id == usuario_id)
+    if conversation_id:
+        query = query.filter(MensajeChat.conversation_id == conversation_id)
+    mensajes = query.order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc()).limit(limit).all()
     mensajes.reverse()
     return [
         {
@@ -1967,12 +2194,23 @@ def _contexto_usuario_para_ia(
         if isinstance(animo_puntuacion, (int, float)) and animo_puntuacion <= 4:
             alerta_ia = "ALERTA CLÍNICA: Ánimo crítico. Ignora mensajes excesivamente positivos y prioriza soporte emocional y fatiga."
 
+        # Extraer restricciones alimentarias desde JSON
+        restricciones_dict = _leer_json_seguro(perfil.restricciones_alimentarias_json, {})
+        restricciones_lista = []
+        if restricciones_dict:
+            if isinstance(restricciones_dict, dict):
+                restricciones_lista = restricciones_dict.get("restricciones", []) or restricciones_dict.get("items", [])
+            elif isinstance(restricciones_dict, list):
+                restricciones_lista = restricciones_dict
+
         contexto.update({
             "peso_actual_kg": float(perfil.peso_actual) if perfil.peso_actual else None,
             "altura_cm": perfil.altura,
             "imc_actual": float(perfil.imc_actual) if perfil.imc_actual else None,
             "frecuencia_gym": perfil.frecuencia_gym,
             "diagnosticos_previos": getattr(perfil, 'diagnosticos_previos', "No registrados"),
+            "restricciones_alimentarias": restricciones_lista if restricciones_lista else [],
+            "objetivo_principal": getattr(perfil, 'objetivo_principal', "No especificado"),
             "instruccion_clinica": alerta_ia # Esto obliga a Gemini a ser empático y preciso
         })
 
@@ -2430,6 +2668,20 @@ class ChatHistorialItemResponse(BaseModel):
     solicitar_altura: bool = False
     activos_premium: List[Dict[str, str]] = Field(default_factory=list)
     fecha: str
+    conversation_id: Optional[str] = None
+    conversation_title: Optional[str] = None
+    conversation_pinned: bool = False
+
+
+class ChatConversationResponse(BaseModel):
+    """Resumen de una conversación persistida del usuario."""
+
+    conversation_id: str
+    titulo: str
+    ultimo_mensaje: str
+    fecha_ultimo_mensaje: str
+    total_mensajes: int
+    fijada: bool = False
 
 
 class AnimoDiaResponse(BaseModel):
@@ -2456,6 +2708,7 @@ class PacienteResumenResponse(BaseModel):
     email: str
     ultimo_imc: Optional[float] = None
     sentimiento_detectado: Optional[str] = None
+    ultima_comida: Optional[str] = None
     ultima_actualizacion: Optional[str] = None
 
 
@@ -2629,6 +2882,26 @@ class SeguimientoCheckinResponse(BaseModel):
     mensaje: str
 
 
+class SeguimientoComidaRequest(BaseModel):
+    """Registro rápido de comida diaria por parte del paciente."""
+
+    tipo: str = Field(default="comida", min_length=3, max_length=30)
+    descripcion: str = Field(..., min_length=3, max_length=500)
+    hora: Optional[str] = Field(default=None, max_length=10)
+
+
+class SeguimientoComidaItemResponse(BaseModel):
+    """Comida registrada y visible para paciente/profesional."""
+
+    id: int
+    usuario_id: int
+    tipo: str
+    descripcion: str
+    hora: Optional[str] = None
+    fecha: str
+    fecha_creacion: str
+
+
 class SeguimientoResumenSemanalResponse(BaseModel):
     """Resumen semanal de indicadores de bienestar del paciente."""
 
@@ -2702,6 +2975,32 @@ class SeguimientoRecursosPersonalizadosResponse(BaseModel):
     seccion: str
     estado: str
     recursos: List[RecursoPersonalizadoItem]
+
+
+class PreferenciasRecursosRequest(BaseModel):
+    """Preferencias de visualización en pantalla de recursos."""
+
+    area_seleccionada: str = Field(default="todas", min_length=3, max_length=30)
+    auto_area: bool = True
+
+
+class PreferenciasRecursosResponse(BaseModel):
+    """Preferencias persistidas por usuario para la vista de recursos."""
+
+    area_seleccionada: str
+    auto_area: bool
+    actualizado_en: Optional[str] = None
+
+
+class InteligenciaRecursosResponse(BaseModel):
+    """Semáforo de riesgo y recomendación de área para personalización dinámica."""
+
+    area_recomendada: str
+    motivo: str
+    riesgo_por_area: Dict[str, str]
+    score_por_area: Dict[str, int]
+    semaforo_global: str
+    actualizado_en: str
 
 
 class DerivacionEstadoUpdateRequest(BaseModel):
@@ -3048,6 +3347,27 @@ def _asegurar_columna_activos_premium_chat() -> None:
                 "ALTER TABLE mensajes_chat ADD COLUMN activos_premium_json TEXT NULL"
             )
         )
+
+
+def _asegurar_columnas_conversaciones_chat() -> None:
+    """Añade columnas para múltiples conversaciones de chat en instalaciones existentes."""
+    inspector = inspect(engine)
+    columnas = {columna["name"] for columna in inspector.get_columns("mensajes_chat")}
+    sentencias: List[str] = []
+
+    if "conversation_id" not in columnas:
+        sentencias.append("ALTER TABLE mensajes_chat ADD COLUMN conversation_id VARCHAR(80) NULL")
+    if "conversation_title" not in columnas:
+        sentencias.append("ALTER TABLE mensajes_chat ADD COLUMN conversation_title VARCHAR(160) NULL")
+    if "conversation_pinned" not in columnas:
+        sentencias.append("ALTER TABLE mensajes_chat ADD COLUMN conversation_pinned BOOLEAN NOT NULL DEFAULT 0")
+
+    if not sentencias:
+        return
+
+    with engine.begin() as conn:
+        for sentencia in sentencias:
+            conn.execute(text(sentencia))
 
 def _asegurar_columnas_perfil_plan_diario() -> None:
     """Añade columnas para persistencia de plan diario en perfiles existentes."""
@@ -3531,6 +3851,55 @@ def _parsear_nota_checkin(texto: Optional[str]) -> Optional[Dict[str, Any]]:
     return data
 
 
+def _normalizar_tipo_comida(tipo: str) -> str:
+    """Normaliza el tipo de comida para mantener consistencia clínica."""
+    t = _normalizar_ascii(tipo or "comida").strip()
+    aliases = {
+        "desayuno": "desayuno",
+        "almuerzo": "comida",
+        "comida": "comida",
+        "cena": "cena",
+        "snack": "snack",
+        "merienda": "snack",
+    }
+    return aliases.get(t, "comida")
+
+
+def _texto_meal_log(tipo: str, descripcion: str, hora: Optional[str]) -> str:
+    """Codifica el registro de comida en un formato estable para parsing posterior."""
+    payload = {
+        "tipo": _normalizar_tipo_comida(tipo),
+        "descripcion": (descripcion or "").strip(),
+        "hora": (hora or "").strip() or None,
+    }
+    return f"[MEAL_LOG]{json.dumps(payload, ensure_ascii=False)}"
+
+
+def _parsear_meal_log(texto: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parsea una entrada de comida persistida en MensajeChat."""
+    base = (texto or "").strip()
+    prefijo = "[MEAL_LOG]"
+    if not base.startswith(prefijo):
+        return None
+    raw = base[len(prefijo):].strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    descripcion = str(data.get("descripcion") or "").strip()
+    if not descripcion:
+        return None
+    return {
+        "tipo": _normalizar_tipo_comida(str(data.get("tipo") or "comida")),
+        "descripcion": descripcion,
+        "hora": (str(data.get("hora") or "").strip() or None),
+    }
+
+
 def _normalizar_seccion_recurso(seccion: str) -> str:
     """Normaliza la sección de recursos solicitada por frontend."""
     s = (seccion or "").strip().lower()
@@ -3698,6 +4067,257 @@ def _es_habito_mental(habito: HabitoAgenda) -> bool:
     """Clasifica hábitos de salud mental y regulación."""
     t = _normalizar_ascii(f"{habito.titulo} {habito.subtitulo}")
     return any(k in t for k in ("emoc", "estres", "respir", "check-in", "checkin", "sueno", "descanso"))
+
+
+def _normalizar_area_recurso_preferencia(area: str) -> str:
+    """Normaliza área seleccionada por el usuario en la pantalla de recursos."""
+    a = _normalizar_ascii(area or "todas").strip()
+    aliases = {
+        "mental": "psicologia",
+        "salud_mental": "psicologia",
+        "saludmental": "psicologia",
+        "gym": "entrenamiento",
+        "entreno": "entrenamiento",
+        "fitness": "entrenamiento",
+        "alimentacion": "nutricion",
+    }
+    normalizada = aliases.get(a, a)
+    validas = {"todas", "nutricion", "psicologia", "entrenamiento", "habitos"}
+    return normalizada if normalizada in validas else "todas"
+
+
+def _cargar_preferencias_recursos_usuario(db: Session, usuario_id: int) -> Dict[str, Any]:
+    """Lee preferencias UI de recursos desde memoria persistida."""
+    memoria = db.query(MemoriaChat).filter(MemoriaChat.usuario_id == usuario_id).first()
+    if memoria is None:
+        return {"area_seleccionada": "todas", "auto_area": True, "actualizado_en": None}
+
+    respuestas = _leer_json_seguro(memoria.respuestas_json, {})
+    if not isinstance(respuestas, dict):
+        respuestas = {}
+
+    ui = respuestas.get("ui_preferencias") if isinstance(respuestas.get("ui_preferencias"), dict) else {}
+    recursos = ui.get("recursos") if isinstance(ui.get("recursos"), dict) else {}
+
+    return {
+        "area_seleccionada": _normalizar_area_recurso_preferencia(str(recursos.get("area_seleccionada") or "todas")),
+        "auto_area": bool(recursos.get("auto_area", True)),
+        "actualizado_en": recursos.get("actualizado_en"),
+    }
+
+
+def _guardar_preferencias_recursos_usuario(
+    db: Session,
+    usuario_id: int,
+    area_seleccionada: str,
+    auto_area: bool,
+) -> Dict[str, Any]:
+    """Guarda preferencias UI de recursos dentro de respuestas_json en MemoriaChat."""
+    memoria = db.query(MemoriaChat).filter(MemoriaChat.usuario_id == usuario_id).first()
+    if memoria is None:
+        memoria = MemoriaChat(
+            usuario_id=usuario_id,
+            tema="preferencias_ui",
+            preguntas_json="[]",
+            respuestas_json="{}",
+            activa=False,
+        )
+        db.add(memoria)
+        db.flush()
+
+    respuestas = _leer_json_seguro(memoria.respuestas_json, {})
+    if not isinstance(respuestas, dict):
+        respuestas = {}
+
+    ui = respuestas.get("ui_preferencias") if isinstance(respuestas.get("ui_preferencias"), dict) else {}
+    recursos = ui.get("recursos") if isinstance(ui.get("recursos"), dict) else {}
+
+    recursos.update(
+        {
+            "area_seleccionada": _normalizar_area_recurso_preferencia(area_seleccionada),
+            "auto_area": bool(auto_area),
+            "actualizado_en": datetime.utcnow().isoformat(),
+        }
+    )
+    ui["recursos"] = recursos
+    respuestas["ui_preferencias"] = ui
+
+    memoria.respuestas_json = json.dumps(respuestas, ensure_ascii=False)
+    memoria.fecha_actualizacion = datetime.utcnow()
+    db.commit()
+    db.refresh(memoria)
+    return _cargar_preferencias_recursos_usuario(db, usuario_id)
+
+
+def _color_riesgo_desde_score(score: int) -> str:
+    """Mapea score numérico a semáforo de riesgo."""
+    if score >= 70:
+        return "rojo"
+    if score >= 40:
+        return "amarillo"
+    return "verde"
+
+
+def _calcular_inteligencia_recursos(db: Session, usuario_id: int) -> Dict[str, Any]:
+    """
+    Calcula área recomendada + riesgo por área usando señales reales:
+    check-in (ánimo/estrés/sueño/energía), adherencia diaria y lenguaje reciente de chat.
+    """
+    ahora = datetime.utcnow()
+    hoy = ahora.date()
+
+    registro = (
+        db.query(RegistroDiario)
+        .filter(RegistroDiario.usuario_id == usuario_id)
+        .order_by(RegistroDiario.fecha.desc(), RegistroDiario.id.desc())
+        .first()
+    )
+
+    parsed = _parsear_nota_checkin(registro.notas_diario if registro else None)
+    animo = int(registro.estado_animo_puntuacion) if registro and registro.estado_animo_puntuacion is not None else 6
+    sentimiento = _normalizar_ascii(str(registro.sentimiento_detectado_ia or "")) if registro else ""
+
+    energia = 5
+    estres = 5
+    sueno = 7.0
+    if parsed is not None:
+        try:
+            energia = int(parsed.get("energia", "5"))
+            estres = int(parsed.get("estres", "5"))
+            sueno = float(parsed.get("sueno", "7"))
+        except Exception:
+            energia, estres, sueno = 5, 5, 7.0
+
+    habitos = (
+        db.query(HabitoAgenda)
+        .filter(HabitoAgenda.usuario_id == usuario_id, HabitoAgenda.dia_semana == hoy.weekday())
+        .all()
+    )
+
+    def _pct(items: List[HabitoAgenda]) -> float:
+        if not items:
+            return 50.0
+        done = len([i for i in items if bool(i.completado)])
+        return round((done / len(items)) * 100, 2)
+
+    pct_nutri = _pct([h for h in habitos if _es_habito_nutricion(h)])
+    pct_gym = _pct([h for h in habitos if _es_habito_gym(h)])
+    pct_mental = _pct([h for h in habitos if _es_habito_mental(h)])
+
+    # Score base por área (0-100)
+    score = {
+        "nutricion": 20,
+        "psicologia": 20,
+        "entrenamiento": 20,
+    }
+
+    # Señales de check-in
+    if animo <= 3:
+        score["psicologia"] += 35
+        score["nutricion"] += 10
+        score["entrenamiento"] += 10
+    elif animo <= 5:
+        score["psicologia"] += 20
+
+    if estres >= 8:
+        score["psicologia"] += 30
+        score["nutricion"] += 12
+        score["entrenamiento"] += 12
+    elif estres >= 6:
+        score["psicologia"] += 15
+
+    if energia <= 3:
+        score["entrenamiento"] += 25
+        score["psicologia"] += 8
+    elif energia <= 5:
+        score["entrenamiento"] += 12
+
+    if sueno < 5.5:
+        score["psicologia"] += 18
+        score["entrenamiento"] += 16
+        score["nutricion"] += 8
+    elif sueno < 6.5:
+        score["psicologia"] += 10
+        score["entrenamiento"] += 8
+
+    # Adherencia por área
+    if pct_nutri < 50:
+        score["nutricion"] += 22
+    elif pct_nutri < 70:
+        score["nutricion"] += 12
+
+    if pct_gym < 50:
+        score["entrenamiento"] += 22
+    elif pct_gym < 70:
+        score["entrenamiento"] += 12
+
+    if pct_mental < 50:
+        score["psicologia"] += 22
+    elif pct_mental < 70:
+        score["psicologia"] += 12
+
+    # Sentimiento detectado
+    if any(k in sentimiento for k in ("ansied", "trist", "depres", "miedo", "agob")):
+        score["psicologia"] += 15
+    if any(k in sentimiento for k in ("atracon", "culpa", "hambre", "comida")):
+        score["nutricion"] += 15
+
+    # Señales recientes de chat del usuario
+    mensajes = (
+        db.query(MensajeChat)
+        .filter(MensajeChat.usuario_id == usuario_id, MensajeChat.emisor == "user")
+        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+        .limit(12)
+        .all()
+    )
+    texto_chat = _normalizar_ascii(" ".join([(m.texto or "") for m in mensajes]))
+
+    claves = {
+        "nutricion": ("dieta", "comida", "hambre", "atracon", "macros", "kcal", "cena"),
+        "psicologia": ("ansiedad", "estres", "animo", "insomnio", "triste", "rumi", "psic"),
+        "entrenamiento": ("rutina", "entreno", "gym", "fuerza", "cardio", "dolor", "lesion", "fitness"),
+    }
+    chat_hits = {
+        area: sum(1 for k in keywords if k in texto_chat)
+        for area, keywords in claves.items()
+    }
+    for area, hits in chat_hits.items():
+        score[area] += min(18, hits * 3)
+
+    for area in score:
+        score[area] = max(0, min(100, int(score[area])))
+
+    # Recomendación de área: mezcla riesgo + intención reciente
+    ordenadas = sorted(score.items(), key=lambda x: x[1], reverse=True)
+    area_top, score_top = ordenadas[0]
+    area_second, score_second = ordenadas[1]
+
+    # Si dos áreas están casi empatadas y en alto riesgo, recomendamos vista integral
+    if score_top >= 65 and abs(score_top - score_second) <= 8:
+        area_recomendada = "todas"
+    else:
+        area_recomendada = area_top
+
+    riesgo_por_area = {
+        "nutricion": _color_riesgo_desde_score(score["nutricion"]),
+        "psicologia": _color_riesgo_desde_score(score["psicologia"]),
+        "entrenamiento": _color_riesgo_desde_score(score["entrenamiento"]),
+    }
+    semaforo_global = _color_riesgo_desde_score(max(score.values()))
+
+    motivo = (
+        f"Recomendación basada en ánimo {animo}/10, estrés {estres}/10, sueño {round(sueno, 1)}h, "
+        f"adherencia (N {pct_nutri:.0f}%, E {pct_gym:.0f}%, M {pct_mental:.0f}%) y señales recientes del chat."
+    )
+
+    return {
+        "area_recomendada": area_recomendada,
+        "motivo": motivo,
+        "riesgo_por_area": riesgo_por_area,
+        "score_por_area": score,
+        "semaforo_global": semaforo_global,
+        "actualizado_en": ahora.isoformat(),
+    }
 
 
 def _normalizar_trastorno(trastorno: str) -> str:
@@ -3915,7 +4535,92 @@ def _serializar_mensaje_chat(mensaje: MensajeChat) -> ChatHistorialItemResponse:
         solicitar_altura=bool(mensaje.solicitar_altura),
         activos_premium=activos_premium,
         fecha=mensaje.fecha_creacion.isoformat(),
+        conversation_id=mensaje.conversation_id,
+        conversation_title=mensaje.conversation_title,
+        conversation_pinned=bool(mensaje.conversation_pinned),
     )
+
+
+def _resumir_titulo_conversacion(texto: str) -> str:
+    """Genera un título corto y legible a partir del primer mensaje del usuario."""
+    base = re.sub(r"\s+", " ", (texto or "").strip())
+    if not base:
+        return "Nuevo chat"
+    return f"{base[:57]}..." if len(base) > 60 else base
+
+
+def _conversation_id_chat(payload: ChatRequest, sender_limpio: str) -> str:
+    """Resuelve conversation_id reutilizable sin requerir tabla adicional."""
+    raw = (payload.conversation_id or "").strip()
+    if raw:
+        return raw[:80]
+    return f"chat-{sender_limpio}-{int(datetime.utcnow().timestamp())}"
+
+
+def _obtener_metadata_conversacion(
+    db: Session,
+    usuario_id: int,
+    conversation_id: str,
+    titulo_sugerido: str,
+) -> Dict[str, Any]:
+    """Recupera metadata persistida de una conversación para no pisar renombres o fijados."""
+    ultimo = (
+        db.query(MensajeChat)
+        .filter(
+            MensajeChat.usuario_id == usuario_id,
+            MensajeChat.conversation_id == conversation_id,
+        )
+        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+        .first()
+    )
+    if ultimo is None:
+        return {"titulo": titulo_sugerido, "fijada": False}
+    titulo = (ultimo.conversation_title or "").strip() or titulo_sugerido
+    return {"titulo": titulo, "fijada": bool(ultimo.conversation_pinned)}
+
+
+def _listar_conversaciones_usuario(
+    db: Session,
+    usuario_id: int,
+    q: Optional[str] = None,
+) -> List[ChatConversationResponse]:
+    """Agrupa mensajes por conversación para el sidebar del chat."""
+    mensajes = (
+        db.query(MensajeChat)
+        .filter(MensajeChat.usuario_id == usuario_id)
+        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+        .all()
+    )
+
+    agrupadas: Dict[str, Dict[str, Any]] = {}
+    filtro = (q or "").strip().lower()
+    for mensaje in mensajes:
+        conversation_id = (mensaje.conversation_id or f"legacy-{usuario_id}").strip()
+        item = agrupadas.get(conversation_id)
+        if item is None:
+            titulo = (mensaje.conversation_title or "").strip() or _resumir_titulo_conversacion(mensaje.texto)
+            ultimo = (mensaje.texto or "").strip()
+            if filtro and filtro not in titulo.lower() and filtro not in ultimo.lower():
+                continue
+            agrupadas[conversation_id] = {
+                "conversation_id": conversation_id,
+                "titulo": titulo,
+                "ultimo_mensaje": ultimo,
+                "fecha_ultimo_mensaje": mensaje.fecha_creacion.isoformat(),
+                "total_mensajes": 1,
+                "fijada": bool(mensaje.conversation_pinned),
+            }
+            continue
+        item["total_mensajes"] += 1
+
+    items = [ChatConversationResponse(**item) for item in agrupadas.values()]
+    items.sort(
+        key=lambda item: (
+            not item.fijada,
+            -(datetime.fromisoformat(item.fecha_ultimo_mensaje).timestamp()),
+        )
+    )
+    return items
 
 
 def _serializar_medicacion(medicacion: MedicacionAsignada) -> MedicacionResponse:
@@ -4702,17 +5407,61 @@ def set_chat_provider(
     logger.info("Proveedor IA actualizado en caliente: %s", provider)
     return ChatProviderResponse(ok=True, provider=provider)
 
+def _generar_peticion_analisis_multimedia(adjuntos: List[Dict[str, Any]]) -> str:
+    """Genera automáticamente una petición de análisis cuando se sube multimedia sin pregunta."""
+    tipos = {
+        "image/jpeg": "imagen JPEG",
+        "image/png": "imagen PNG",
+        "image/webp": "imagen WEBP",
+        "image/gif": "imagen animada",
+        "image/bmp": "imagen BMP",
+        "image/tiff": "imagen TIFF",
+        "image/heic": "imagen HEIC",
+        "image/heif": "imagen HEIF",
+        "video/mp4": "video MP4",
+        "video/quicktime": "video MOV",
+        "video/webm": "video WEBM",
+        "video/x-matroska": "video MKV",
+        "application/pdf": "documento PDF",
+    }
+    
+    descripciones = []
+    for adjunto in adjuntos:
+        mime = str(adjunto.get("mime_type") or "").lower()
+        desc = tipos.get(mime, "archivo")
+        descripciones.append(desc)
+    
+    archivos_str = " y ".join(descripciones) if descripciones else "archivo adjunto"
+    return f"Analiza detalladamente el {archivos_str} que adjunto. Describe qué contiene, explica los puntos principales, y resume el contenido de forma clara."
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     """Orquesta respuesta de chat priorizando RASA y fallback robusto con IA."""
     sender_limpio = payload.sender.strip()
+    conversation_id = _conversation_id_chat(payload, sender_limpio)
     mensaje_limpio = _normalizar_mensaje_chat(payload.mensaje)
+    conversation_title = _resumir_titulo_conversacion(mensaje_limpio)
+    conversation_pinned = False
 
     area = _detectar_area_chat(mensaje_limpio)
     lugar_entrenamiento = _detectar_lugar_entrenamiento(mensaje_limpio)
     adjuntos_normalizados = _normalizar_adjuntos_chat(payload.adjuntos)
     tiene_multimedia = bool(adjuntos_normalizados)
     es_solicitud_experta = _es_solicitud_experta(mensaje_limpio)
+    
+    # Si hay multimedia pero NO hay pregunta → generar automáticamente petición de análisis
+    if tiene_multimedia and not mensaje_limpio.strip():
+        mensaje_limpio = _generar_peticion_analisis_multimedia(adjuntos_normalizados)
+    
+    texto_pdf_extraido = _extraer_texto_pdf_adjuntos(adjuntos_normalizados)
+    mensaje_para_ia = mensaje_limpio
+    if texto_pdf_extraido:
+        mensaje_para_ia = (
+            f"{mensaje_limpio}\n\n"
+            "[TEXTO EXTRAIDO AUTOMATICAMENTE DE PDF ADJUNTO]\n"
+            f"{texto_pdf_extraido}"
+        )
 
     plan_visual_semanal = []
     respuesta_ia = ""
@@ -4730,6 +5479,14 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         usuario_chat = None
 
     if usuario_chat is not None:
+        metadata_conversacion = _obtener_metadata_conversacion(
+            db,
+            usuario_chat.id,
+            conversation_id,
+            conversation_title,
+        )
+        conversation_title = str(metadata_conversacion.get("titulo") or conversation_title)
+        conversation_pinned = bool(metadata_conversacion.get("fijada"))
         try:
             contexto_ia = _contexto_usuario_para_ia(db, usuario_chat)
         except Exception:
@@ -4737,7 +5494,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
             contexto_ia = {}
 
         try:
-            historial_chat = _historial_para_consulta_ia(db, usuario_chat.id)
+            historial_chat = _historial_para_consulta_ia(db, usuario_chat.id, conversation_id=conversation_id)
         except Exception:
             logger.exception("Error al cargar historial de chat para IA")
             historial_chat = []
@@ -4782,7 +5539,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     if not respuesta_ia:
         try:
             resultado_ia = consultar_ia(
-                mensaje_usuario=mensaje_limpio,
+                mensaje_usuario=mensaje_para_ia,
                 historial_chat=historial_chat,
                 imagenes=adjuntos_normalizados,
                 contexto_adicional=contexto_ia,
@@ -4799,7 +5556,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         except Exception:
             logger.exception("Error al consultar proveedor IA")
             respuesta_ia = obtener_respuesta_local_segura(
-                mensaje_usuario=mensaje_limpio,
+                mensaje_usuario=mensaje_para_ia,
                 historial_chat=historial_chat,
                 imagenes=adjuntos_normalizados,
                 contexto_adicional=contexto_ia,
@@ -4809,7 +5566,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
 
     if not respuesta_ia:
         respuesta_ia = obtener_respuesta_local_segura(
-            mensaje_usuario=mensaje_limpio,
+            mensaje_usuario=mensaje_para_ia,
             historial_chat=historial_chat,
             imagenes=adjuntos_normalizados,
             contexto_adicional=contexto_ia,
@@ -4832,12 +5589,39 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     # PERSISTENCIA BD (Guardar mensajes)
     if usuario_chat:
         try:
-            db.add(MensajeChat(usuario_id=usuario_chat.id, emisor="user", texto=mensaje_limpio))
-            db.add(MensajeChat(usuario_id=usuario_chat.id, emisor="ia", texto=respuesta_ia))
+            db.add(MensajeChat(
+                usuario_id=usuario_chat.id,
+                conversation_id=conversation_id,
+                conversation_title=conversation_title,
+                conversation_pinned=conversation_pinned,
+                emisor="user",
+                texto=mensaje_limpio,
+            ))
+            db.add(MensajeChat(
+                usuario_id=usuario_chat.id,
+                conversation_id=conversation_id,
+                conversation_title=conversation_title,
+                conversation_pinned=conversation_pinned,
+                emisor="ia",
+                texto=respuesta_ia,
+            ))
             db.commit()
         except Exception:
             db.rollback()
             logger.exception("No se pudo persistir historial de chat")
+
+    # AUTO-GUARDADO DE PLAN: si la IA generó un plan completo, persistirlo en planes_ia
+    tipo_plan = {
+        "dieta": "nutricion",
+        "nutricion": "nutricion",
+        "entrenamiento": "entrenamiento",
+        "psicologia": "psicologia",
+    }.get(area)
+    if usuario_chat and tipo_plan:
+        try:
+            _auto_guardar_plan_ia(db, usuario_chat.id, tipo_plan, mensaje_limpio, respuesta_ia, contexto_ia)
+        except Exception:
+            logger.exception("No se pudo auto-guardar plan IA")
 
     return ChatResponse(
         ok=True,
@@ -4854,37 +5638,83 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         memoria_activa=bool(contexto_ia.get("memoria_activa")),
         memoria_tema=contexto_ia.get("memoria_tema"),
         respuestas_memoria=contexto_ia.get("memoria_respuestas") or {},
+        conversation_id=conversation_id,
     )
 
 @app.get("/chat/historial", response_model=List[ChatHistorialItemResponse])
 def obtener_historial_chat(
     limit: int = Query(default=80, ge=1, le=300),
+    conversation_id: Optional[str] = Query(default=None),
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     db: Session = Depends(get_db),
 ) -> List[ChatHistorialItemResponse]:
     """Devuelve historial de chat persistido para hidratar conversación tras reinicio."""
-    mensajes = (
-        db.query(MensajeChat)
-        .filter(MensajeChat.usuario_id == usuario_actual.id)
-        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
-        .limit(limit)
-        .all()
-    )
+    query = db.query(MensajeChat).filter(MensajeChat.usuario_id == usuario_actual.id)
+    if conversation_id:
+        query = query.filter(MensajeChat.conversation_id == conversation_id)
+    mensajes = query.order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc()).limit(limit).all()
     mensajes.reverse()
     return [_serializar_mensaje_chat(m) for m in mensajes]
 
 
+@app.get("/chat/conversations", response_model=List[ChatConversationResponse])
+def listar_conversaciones_chat(
+    q: Optional[str] = Query(default=None),
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[ChatConversationResponse]:
+    """Lista conversaciones del usuario para navegación estilo GPT."""
+    return _listar_conversaciones_usuario(db, usuario_actual.id, q=q)
+
+
+@app.patch("/chat/conversations/{conversation_id}", response_model=ChatConversationResponse)
+def actualizar_conversacion_chat(
+    conversation_id: str,
+    payload: ChatConversationUpdateRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> ChatConversationResponse:
+    """Permite renombrar o fijar una conversación existente."""
+    mensajes = (
+        db.query(MensajeChat)
+        .filter(
+            MensajeChat.usuario_id == usuario_actual.id,
+            MensajeChat.conversation_id == conversation_id,
+        )
+        .all()
+    )
+    if not mensajes:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada")
+
+    nuevo_titulo = None
+    if payload.titulo is not None:
+        nuevo_titulo = payload.titulo.strip() or "Nuevo chat"
+
+    for mensaje in mensajes:
+        if nuevo_titulo is not None:
+            mensaje.conversation_title = nuevo_titulo[:160]
+        if payload.fijada is not None:
+            mensaje.conversation_pinned = bool(payload.fijada)
+
+    db.commit()
+    conversaciones = _listar_conversaciones_usuario(db, usuario_actual.id)
+    for item in conversaciones:
+        if item.conversation_id == conversation_id:
+            return item
+    raise HTTPException(status_code=404, detail="Conversación actualizada pero no encontrada")
+
+
 @app.delete("/chat/historial")
 def limpiar_historial_chat(
+    conversation_id: Optional[str] = Query(default=None),
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     db: Session = Depends(get_db),
 ) -> Dict[str, str]:
     """Elimina historial persistido de chat del usuario autenticado."""
-    (
-        db.query(MensajeChat)
-        .filter(MensajeChat.usuario_id == usuario_actual.id)
-        .delete(synchronize_session=False)
-    )
+    query = db.query(MensajeChat).filter(MensajeChat.usuario_id == usuario_actual.id)
+    if conversation_id:
+        query = query.filter(MensajeChat.conversation_id == conversation_id)
+    query.delete(synchronize_session=False)
     db.commit()
     return {"ok": "true"}
 
@@ -5136,11 +5966,6 @@ def actualizar_perfil_plan_diario(
         perfil.objetivo_principal = payload.objetivo_principal
 
     if payload.deslices_hoy is not None:
-        if perfil.deslices_fecha == hoy:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="El registro de deslices ya fue completado hoy. Podras editarlo manana.",
-            )
         deslices_normalizados = [item.strip() for item in payload.deslices_hoy if isinstance(item, str) and item.strip()]
         perfil.deslices_hoy_json = json.dumps(deslices_normalizados, ensure_ascii=False)
         perfil.deslices_fecha = hoy
@@ -5327,6 +6152,40 @@ def descargar_informe_pdf(
     db: Session = Depends(get_db),
 ) -> Response:
     """Genera y descarga un informe PDF mensual para uso clinico."""
+    def _to_float(value: Any) -> Optional[float]:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _to_int(value: Any) -> Optional[int]:
+        try:
+            if value is None:
+                return None
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _pdf_safe(value: Any) -> str:
+        """Asegura texto compatible con fuentes base de FPDF (latin-1)."""
+        text = str(value or "")
+        reemplazos = {
+            "\u2018": "'",
+            "\u2019": "'",
+            "\u201c": '"',
+            "\u201d": '"',
+            "\u2013": "-",
+            "\u2014": "-",
+            "\u2022": "-",
+            "\u2026": "...",
+            "\u00a0": " ",
+        }
+        for original, reemplazo in reemplazos.items():
+            text = text.replace(original, reemplazo)
+        return text.encode("latin-1", "replace").decode("latin-1")
+
     usuario_actual: Optional[Usuario] = None
     if authorization:
         try:
@@ -5421,8 +6280,8 @@ def descargar_informe_pdf(
     def _linea_clinica(txt: str, max_chars: int = 140) -> str:
         limpio = (txt or "").replace("\n", " ").strip()
         if len(limpio) <= max_chars:
-            return limpio
-        return limpio[: max_chars - 3].rstrip() + "..."
+            return _pdf_safe(limpio)
+        return _pdf_safe(limpio[: max_chars - 3].rstrip() + "...")
 
     historial_imc = _extraer_imcs_desde_notas(registros)
     if not historial_imc and perfil and perfil.imc_actual:
@@ -5434,6 +6293,16 @@ def descargar_informe_pdf(
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=14)
     pdf.add_page()
+    pdf.set_draw_color(44, 110, 188)
+    pdf.set_fill_color(238, 245, 255)
+
+    def _section_title(text: str) -> None:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(18, 53, 106)
+        pdf.set_fill_color(238, 245, 255)
+        pdf.cell(0, 9, _pdf_safe(text), ln=True, fill=True)
+        pdf.set_text_color(20, 26, 38)
+        pdf.set_font("Helvetica", "", 11)
 
     # Logo de AuraFit AI (si existe en proyecto).
     logo_path = Path(__file__).resolve().parent.parent / "frontend" / "web" / "favicon.png"
@@ -5443,111 +6312,119 @@ def descargar_informe_pdf(
         except Exception:
             pass
 
+    pdf.set_fill_color(238, 245, 255)
+    pdf.rect(8, 8, 194, 28, style="F")
     pdf.set_font("Helvetica", "B", 16)
+    pdf.set_text_color(18, 53, 106)
     pdf.cell(0, 10, "AuraFit AI - Informe Mensual", ln=True)
+    pdf.set_text_color(20, 26, 38)
     pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 8, f"Paciente: {usuario.nombre}", ln=True)
-    pdf.cell(0, 8, f"Email: {usuario.email}", ln=True)
+    pdf.cell(0, 8, _pdf_safe(f"Paciente: {usuario.nombre}"), ln=True)
+    pdf.cell(0, 8, _pdf_safe(f"Email: {usuario.email}"), ln=True)
     pdf.cell(0, 8, f"Fecha de generacion: {datetime.utcnow().date().isoformat()}", ln=True)
     pdf.ln(4)
 
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "1) Resumen de perfil y diagnostico metabolico", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    _section_title("1) Resumen de perfil y diagnostico metabolico")
     if perfil:
-        pdf.cell(0, 7, f"Peso actual: {float(perfil.peso_actual) if perfil.peso_actual else 'N/D'} kg", ln=True)
-        pdf.cell(0, 7, f"Altura: {perfil.altura if perfil.altura else 'N/D'} cm", ln=True)
-        pdf.cell(0, 7, f"IMC actual: {float(perfil.imc_actual) if perfil.imc_actual else 'N/D'}", ln=True)
-        if perfil.imc_actual is not None:
-            imc_val = float(perfil.imc_actual)
+        peso_actual = _to_float(perfil.peso_actual)
+        imc_actual = _to_float(perfil.imc_actual)
+        pdf.cell(0, 7, _pdf_safe(f"Peso actual: {peso_actual if peso_actual is not None else 'N/D'} kg"), ln=True)
+        pdf.cell(0, 7, _pdf_safe(f"Altura: {perfil.altura if perfil.altura else 'N/D'} cm"), ln=True)
+        pdf.cell(0, 7, _pdf_safe(f"IMC actual: {imc_actual if imc_actual is not None else 'N/D'}"), ln=True)
+        if imc_actual is not None:
+            imc_val = imc_actual
             if imc_val >= 30:
                 diagnostico = "IMC elevado: priorizar bajo impacto articular y déficit moderado con proteína alta."
             elif imc_val < 18.5:
                 diagnostico = "IMC bajo: priorizar ganancia de masa magra y estabilidad energética."
             else:
                 diagnostico = "IMC en rango intermedio: foco en recomposición y adherencia técnica."
-            pdf.multi_cell(0, 7, f"Diagnóstico metabólico: {diagnostico}")
+            pdf.multi_cell(0, 7, _pdf_safe(f"Diagnóstico metabólico: {diagnostico}"))
     else:
         pdf.cell(0, 7, "Sin perfil de salud registrado", ln=True)
 
-    pdf.cell(0, 7, f"Riesgo emocional 7d: {kpis.riesgo_emocional}", ln=True)
-    pdf.cell(0, 7, f"Adherencia nutricional 7d: {kpis.adherencia_nutricional_pct if kpis.adherencia_nutricional_pct is not None else 'N/D'}%", ln=True)
-    pdf.cell(0, 7, f"Adherencia hábitos 7d: {kpis.adherencia_habitos_pct if kpis.adherencia_habitos_pct is not None else 'N/D'}%", ln=True)
+    pdf.cell(0, 7, _pdf_safe(f"Riesgo emocional 7d: {kpis.riesgo_emocional}"), ln=True)
+    pdf.cell(0, 7, _pdf_safe(f"Adherencia nutricional 7d: {kpis.adherencia_nutricional_pct if kpis.adherencia_nutricional_pct is not None else 'N/D'}%"), ln=True)
+    pdf.cell(0, 7, _pdf_safe(f"Adherencia hábitos 7d: {kpis.adherencia_habitos_pct if kpis.adherencia_habitos_pct is not None else 'N/D'}%"), ln=True)
 
     pdf.ln(3)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "2) Evolucion del IMC", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    _section_title("2) Evolucion del IMC")
     if historial_imc:
         for p in sorted(historial_imc, key=lambda x: x["fecha"])[-10:]:
-            pdf.cell(0, 7, f"{p['fecha']}: IMC {p['imc']}", ln=True)
+            pdf.cell(0, 7, _pdf_safe(f"{p['fecha']}: IMC {p['imc']}"), ln=True)
     else:
         pdf.cell(0, 7, "No hay datos historicos de IMC disponibles", ln=True)
 
     pdf.ln(3)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "3) Plan nutricional clinico activo", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    _section_title("3) Plan nutricional clinico activo")
     if plan_nutri is not None:
-        pdf.cell(0, 7, f"Kcal objetivo: {int(plan_nutri.calorias_objetivo)} kcal", ln=True)
-        pdf.cell(0, 7, f"Macros: P {int(plan_nutri.proteinas_g)}g | C {int(plan_nutri.carbohidratos_g)}g | G {int(plan_nutri.grasas_g)}g", ln=True)
-        pdf.cell(0, 7, f"Objetivo: {plan_nutri.objetivo_clinico} | Riesgo metabólico: {plan_nutri.riesgo_metabolico}", ln=True)
+        kcal_obj = _to_int(plan_nutri.calorias_objetivo)
+        prot = _to_int(plan_nutri.proteinas_g)
+        carb = _to_int(plan_nutri.carbohidratos_g)
+        grasa = _to_int(plan_nutri.grasas_g)
+        kcal_txt = f"{kcal_obj} kcal" if kcal_obj is not None else "N/D"
+        prot_txt = f"{prot}g" if prot is not None else "N/D"
+        carb_txt = f"{carb}g" if carb is not None else "N/D"
+        grasa_txt = f"{grasa}g" if grasa is not None else "N/D"
+        pdf.cell(0, 7, _pdf_safe(f"Kcal objetivo: {kcal_txt}"), ln=True)
+        pdf.cell(0, 7, _pdf_safe(f"Macros: P {prot_txt} | C {carb_txt} | G {grasa_txt}"), ln=True)
+        pdf.cell(0, 7, _pdf_safe(f"Objetivo: {plan_nutri.objetivo_clinico} | Riesgo metabólico: {plan_nutri.riesgo_metabolico}"), ln=True)
         if plan_nutri.observaciones:
             pdf.multi_cell(0, 6, f"Observaciones: {_linea_clinica(plan_nutri.observaciones, 300)}")
     else:
         pdf.cell(0, 7, "No hay plan nutricional clínico activo", ln=True)
 
     pdf.ln(3)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "4) Medicacion activa", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    _section_title("4) Medicacion activa")
     if meds_activas:
         for med in meds_activas:
             pdf.multi_cell(
                 0,
                 6,
-                f"- {med.medicamento} | {med.dosis} | {med.frecuencia}"
-                + (f" | {_linea_clinica(med.instrucciones, 120)}" if med.instrucciones else ""),
+                _pdf_safe(
+                    f"- {med.medicamento} | {med.dosis} | {med.frecuencia}"
+                    + (f" | {_linea_clinica(med.instrucciones, 120)}" if med.instrucciones else "")
+                ),
             )
     else:
         pdf.cell(0, 7, "Sin medicación activa registrada", ln=True)
 
     pdf.ln(3)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "5) Derivaciones y coordinacion", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    _section_title("5) Derivaciones y coordinacion")
     if derivaciones_abiertas:
         for d in derivaciones_abiertas:
             destino = (d.especialidad_destino or "especialidad").strip()
-            pdf.multi_cell(0, 6, f"- {destino.upper()} [{d.estado}] | {_linea_clinica(d.motivo, 150)}")
+            pdf.multi_cell(0, 6, _pdf_safe(f"- {destino.upper()} [{d.estado}] | {_linea_clinica(d.motivo, 150)}"))
     else:
         pdf.cell(0, 7, "No hay derivaciones abiertas en este periodo", ln=True)
 
     pdf.ln(3)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "6) Notas clínicas del especialista", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    _section_title("6) Notas clinicas del especialista")
     if notas_clinicas:
         for n in notas_clinicas:
             titulo = _extraer_titulo_nota_clinica(n.texto)
             cuerpo = _extraer_cuerpo_nota_clinica(n.texto)
             fecha = n.fecha_creacion.date().isoformat() if n.fecha_creacion else "N/D"
-            pdf.multi_cell(0, 6, f"- [{fecha}] {titulo}: {_linea_clinica(cuerpo, 220)}")
+            pdf.multi_cell(0, 6, _pdf_safe(f"- [{fecha}] {titulo}: {_linea_clinica(cuerpo, 220)}"))
     else:
         pdf.cell(0, 7, "No hay notas clínicas recientes", ln=True)
 
     pdf.ln(3)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, "7) Resumen de consejos de IA (curado)", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    _section_title("7) Resumen de consejos de IA (curado)")
     if consejos:
         for idx, consejo in enumerate(consejos, start=1):
-            pdf.multi_cell(0, 6, f"{idx}. {_linea_clinica(consejo, 320)}")
+            pdf.multi_cell(0, 6, _pdf_safe(f"{idx}. {_linea_clinica(consejo, 320)}"))
             pdf.ln(1)
     else:
         pdf.cell(0, 7, "No hay recomendaciones IA clínicas válidas en este periodo", ln=True)
 
-    pdf_bytes = bytes(pdf.output(dest="S"))
+    pdf_raw = pdf.output(dest="S")
+    if isinstance(pdf_raw, (bytes, bytearray)):
+        pdf_bytes = bytes(pdf_raw)
+    elif isinstance(pdf_raw, str):
+        pdf_bytes = pdf_raw.encode("latin-1", "replace")
+    else:
+        pdf_bytes = str(pdf_raw).encode("latin-1", "replace")
     filename = f"informe_mensual_usuario_{usuario_id}.pdf"
 
     return Response(
@@ -5586,6 +6463,21 @@ def listar_pacientes_para_profesional(
             .order_by(RegistroDiario.fecha.desc(), RegistroDiario.id.desc())
             .first()
         )
+        ultima_comida_msg = (
+            db.query(MensajeChat)
+            .filter(MensajeChat.usuario_id == paciente.id)
+            .filter(MensajeChat.emisor == "meal_log")
+            .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+            .first()
+        )
+        meal_data = _parsear_meal_log(ultima_comida_msg.texto if ultima_comida_msg else None)
+        if meal_data:
+            tipo = str(meal_data.get("tipo") or "comida").capitalize()
+            descripcion = str(meal_data.get("descripcion") or "").strip()
+            hora = str(meal_data.get("hora") or "").strip()
+            ultima_comida = f"{tipo}: {descripcion}" if not hora else f"{tipo} {hora}: {descripcion}"
+        else:
+            ultima_comida = "Sin registro reciente"
 
         resultados.append(
             PacienteResumenResponse(
@@ -5598,6 +6490,7 @@ def listar_pacientes_para_profesional(
                     if ultimo_registro and ultimo_registro.sentimiento_detectado_ia
                     else None
                 ),
+                ultima_comida=ultima_comida,
                 ultima_actualizacion=(
                     ultimo_registro.fecha.isoformat() if ultimo_registro else None
                 ),
@@ -6637,7 +7530,13 @@ def descargar_informe_hospitalario_pdf(
             pdf.multi_cell(0, 6, f"Observaciones: {checklist.observaciones}")
 
     filename = f"informe_hospitalario_{paciente_id}_{trastorno_norm}_{severidad_norm}.pdf"
-    pdf_bytes = bytes(pdf.output(dest="S"))
+    pdf_raw = pdf.output(dest="S")
+    if isinstance(pdf_raw, (bytes, bytearray)):
+        pdf_bytes = bytes(pdf_raw)
+    elif isinstance(pdf_raw, str):
+        pdf_bytes = pdf_raw.encode("latin-1", "replace")
+    else:
+        pdf_bytes = str(pdf_raw).encode("latin-1", "replace")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -7039,6 +7938,126 @@ def registrar_checkin_diario(
     )
 
 
+@app.post("/seguimiento/comidas", response_model=SeguimientoComidaItemResponse)
+def registrar_comida_diaria(
+    payload: SeguimientoComidaRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> SeguimientoComidaItemResponse:
+    """Permite al paciente registrar comidas para seguimiento nutricional profesional."""
+    hora = (payload.hora or "").strip()
+    if hora and not re.match(r"^(?:[01]?\d|2[0-3]):[0-5]\d$", hora):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="hora debe tener formato HH:MM",
+        )
+
+    texto = _texto_meal_log(payload.tipo, payload.descripcion, hora or None)
+    item = MensajeChat(
+        usuario_id=usuario_actual.id,
+        emisor="meal_log",
+        texto=texto,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    parsed = _parsear_meal_log(item.texto) or {}
+    return SeguimientoComidaItemResponse(
+        id=item.id,
+        usuario_id=usuario_actual.id,
+        tipo=str(parsed.get("tipo") or "comida"),
+        descripcion=str(parsed.get("descripcion") or payload.descripcion),
+        hora=(parsed.get("hora") if parsed.get("hora") is not None else None),
+        fecha=(item.fecha_creacion.date().isoformat() if item.fecha_creacion else datetime.utcnow().date().isoformat()),
+        fecha_creacion=(item.fecha_creacion.isoformat() if item.fecha_creacion else datetime.utcnow().isoformat()),
+    )
+
+
+@app.get("/seguimiento/comidas", response_model=List[SeguimientoComidaItemResponse])
+def listar_comidas_diarias(
+    dias: int = Query(default=14, ge=1, le=60),
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[SeguimientoComidaItemResponse]:
+    """Lista comidas registradas por el paciente para su panel nutricional."""
+    desde = datetime.utcnow() - timedelta(days=dias)
+    rows = (
+        db.query(MensajeChat)
+        .filter(MensajeChat.usuario_id == usuario_actual.id, MensajeChat.emisor == "meal_log")
+        .filter(MensajeChat.fecha_creacion >= desde)
+        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+        .all()
+    )
+
+    salida: List[SeguimientoComidaItemResponse] = []
+    for row in rows:
+        parsed = _parsear_meal_log(row.texto)
+        if not parsed:
+            continue
+        salida.append(
+            SeguimientoComidaItemResponse(
+                id=row.id,
+                usuario_id=usuario_actual.id,
+                tipo=str(parsed.get("tipo") or "comida"),
+                descripcion=str(parsed.get("descripcion") or "").strip(),
+                hora=(parsed.get("hora") if parsed.get("hora") is not None else None),
+                fecha=(row.fecha_creacion.date().isoformat() if row.fecha_creacion else datetime.utcnow().date().isoformat()),
+                fecha_creacion=(row.fecha_creacion.isoformat() if row.fecha_creacion else datetime.utcnow().isoformat()),
+            )
+        )
+    return salida
+
+
+@app.get(
+    "/profesionales/pacientes/{paciente_id}/comidas",
+    response_model=List[SeguimientoComidaItemResponse],
+)
+def listar_comidas_paciente_profesional(
+    paciente_id: int,
+    dias: int = Query(default=14, ge=1, le=90),
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[SeguimientoComidaItemResponse]:
+    """Permite a profesionales ver comidas registradas por paciente (nutrición y medicina incluidas)."""
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo profesionales pueden consultar comidas de pacientes",
+        )
+
+    paciente = db.query(Usuario).filter(Usuario.id == paciente_id).first()
+    if not paciente:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado")
+
+    desde = datetime.utcnow() - timedelta(days=dias)
+    rows = (
+        db.query(MensajeChat)
+        .filter(MensajeChat.usuario_id == paciente_id, MensajeChat.emisor == "meal_log")
+        .filter(MensajeChat.fecha_creacion >= desde)
+        .order_by(MensajeChat.fecha_creacion.desc(), MensajeChat.id.desc())
+        .all()
+    )
+
+    salida: List[SeguimientoComidaItemResponse] = []
+    for row in rows:
+        parsed = _parsear_meal_log(row.texto)
+        if not parsed:
+            continue
+        salida.append(
+            SeguimientoComidaItemResponse(
+                id=row.id,
+                usuario_id=paciente_id,
+                tipo=str(parsed.get("tipo") or "comida"),
+                descripcion=str(parsed.get("descripcion") or "").strip(),
+                hora=(parsed.get("hora") if parsed.get("hora") is not None else None),
+                fecha=(row.fecha_creacion.date().isoformat() if row.fecha_creacion else datetime.utcnow().date().isoformat()),
+                fecha_creacion=(row.fecha_creacion.isoformat() if row.fecha_creacion else datetime.utcnow().isoformat()),
+            )
+        )
+    return salida
+
+
 @app.get("/seguimiento/resumen-semanal", response_model=SeguimientoResumenSemanalResponse)
 def obtener_resumen_semanal(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
@@ -7291,6 +8310,60 @@ def obtener_recursos_personalizados(
         seccion=seccion_norm,
         estado=estado,
         recursos=_recursos_personalizados_por_seccion(seccion_norm, estado, registro),
+    )
+
+
+@app.get("/usuarios/preferencias-recursos", response_model=PreferenciasRecursosResponse)
+def obtener_preferencias_recursos_usuario(
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> PreferenciasRecursosResponse:
+    """Devuelve preferencias persistidas de la pantalla de recursos por usuario."""
+    pref = _cargar_preferencias_recursos_usuario(db, usuario_actual.id)
+    return PreferenciasRecursosResponse(
+        area_seleccionada=pref["area_seleccionada"],
+        auto_area=bool(pref["auto_area"]),
+        actualizado_en=pref.get("actualizado_en"),
+    )
+
+
+@app.put("/usuarios/preferencias-recursos", response_model=PreferenciasRecursosResponse)
+def actualizar_preferencias_recursos_usuario(
+    payload: PreferenciasRecursosRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> PreferenciasRecursosResponse:
+    """Persiste área seleccionada y modo auto-recomendación para recursos."""
+    pref = _guardar_preferencias_recursos_usuario(
+        db,
+        usuario_actual.id,
+        payload.area_seleccionada,
+        payload.auto_area,
+    )
+    return PreferenciasRecursosResponse(
+        area_seleccionada=pref["area_seleccionada"],
+        auto_area=bool(pref["auto_area"]),
+        actualizado_en=pref.get("actualizado_en"),
+    )
+
+
+@app.get("/seguimiento/inteligencia-recursos", response_model=InteligenciaRecursosResponse)
+def obtener_inteligencia_recursos(
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> InteligenciaRecursosResponse:
+    """
+    Recomienda el área más relevante y devuelve semáforo de riesgo por área
+    para personalizar dinámicamente la pantalla de recursos.
+    """
+    data = _calcular_inteligencia_recursos(db, usuario_actual.id)
+    return InteligenciaRecursosResponse(
+        area_recomendada=str(data["area_recomendada"]),
+        motivo=str(data["motivo"]),
+        riesgo_por_area=dict(data["riesgo_por_area"]),
+        score_por_area=dict(data["score_por_area"]),
+        semaforo_global=str(data["semaforo_global"]),
+        actualizado_en=str(data["actualizado_en"]),
     )
 
 
@@ -7774,6 +8847,598 @@ async def health_check_db():
         "status": "healthy" if is_connected else "unhealthy",
         "database": "connected" if is_connected else "disconnected",
     }
+
+
+# ---------------------------------------------------------------------------
+# PLANES IA – Gestión de planes con duración y notificaciones de vencimiento
+# ---------------------------------------------------------------------------
+
+class PlanIACreateRequest(BaseModel):
+    tipo: str  # nutricion | entrenamiento | psicologia
+    objetivo: Optional[str] = None
+    contenido: str
+    duracion_dias: int = 7
+
+
+class PlanIAResponse(BaseModel):
+    id: int
+    tipo: str
+    objetivo: Optional[str]
+    contenido: str
+    duracion_dias: int
+    fecha_inicio: str
+    fecha_fin: str
+    activo: bool
+    dias_restantes: int
+    vence_pronto: bool  # True si quedan <=2 días
+
+
+class NotificacionPlanResponse(BaseModel):
+    plan_id: int
+    tipo: str
+    mensaje: str
+    dias_restantes: int
+    urgente: bool
+
+
+class PlanIAProfesionalUpdateRequest(BaseModel):
+    objetivo: Optional[str] = None
+    contenido: Optional[str] = None
+    duracion_dias: Optional[int] = None
+    activo: Optional[bool] = None
+
+
+def _tipos_plan_validos() -> set[str]:
+    return {"nutricion", "entrenamiento", "psicologia"}
+
+
+def _roles_permitidos_por_tipo_plan(tipo: str) -> set[str]:
+    mapa = {
+        "nutricion": {"nutricionista", "medico", "administrador"},
+        "entrenamiento": {"coach", "medico", "administrador"},
+        "psicologia": {"psicologo", "medico", "administrador"},
+    }
+    return mapa.get(tipo, {"administrador"})
+
+
+def _assert_permiso_plan_por_tipo(usuario: Usuario, tipo: str) -> None:
+    rol = _rol_actual(usuario)
+    if rol not in _roles_permitidos_por_tipo_plan(tipo):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permisos para editar este tipo de rutina",
+        )
+
+
+def _assert_paciente_existente(db: Session, paciente_id: int) -> Usuario:
+    paciente = db.query(Usuario).filter(Usuario.id == paciente_id).first()
+    if not paciente:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Paciente no encontrado",
+        )
+    return paciente
+
+
+def _serializar_plan_ia(plan: PlanIA) -> PlanIAResponse:
+    hoy = datetime.utcnow()
+    dias_restantes = max(0, (plan.fecha_fin - hoy).days)
+    return PlanIAResponse(
+        id=plan.id,
+        tipo=plan.tipo,
+        objetivo=plan.objetivo,
+        contenido=plan.contenido,
+        duracion_dias=plan.duracion_dias,
+        fecha_inicio=plan.fecha_inicio.isoformat(),
+        fecha_fin=plan.fecha_fin.isoformat(),
+        activo=plan.activo,
+        dias_restantes=dias_restantes,
+        vence_pronto=dias_restantes <= 2 and plan.activo,
+    )
+
+
+@app.post("/planes", response_model=PlanIAResponse, status_code=status.HTTP_201_CREATED)
+def crear_plan_ia(
+    payload: PlanIACreateRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> PlanIAResponse:
+    """Guarda un plan generado por la IA con fecha de inicio y fin calculada."""
+    if payload.duracion_dias < 1 or payload.duracion_dias > 365:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="duracion_dias debe estar entre 1 y 365",
+        )
+    tipos_validos = _tipos_plan_validos()
+    if payload.tipo not in tipos_validos:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"tipo debe ser uno de: {', '.join(tipos_validos)}",
+        )
+
+    ahora = datetime.utcnow()
+    # Desactivar planes activos del mismo tipo para este usuario
+    db.query(PlanIA).filter(
+        PlanIA.usuario_id == usuario_actual.id,
+        PlanIA.tipo == payload.tipo,
+        PlanIA.activo == True,  # noqa: E712
+    ).update({"activo": False})
+
+    plan = PlanIA(
+        usuario_id=usuario_actual.id,
+        tipo=payload.tipo,
+        objetivo=payload.objetivo,
+        contenido=payload.contenido,
+        duracion_dias=payload.duracion_dias,
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=payload.duracion_dias),
+        activo=True,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return _serializar_plan_ia(plan)
+
+
+@app.get("/profesionales/pacientes/{paciente_id}/planes", response_model=List[PlanIAResponse])
+def listar_planes_paciente_profesional(
+    paciente_id: int,
+    activo: Optional[bool] = None,
+    tipo: Optional[str] = None,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[PlanIAResponse]:
+    """Permite a profesionales listar rutinas IA de un paciente."""
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo profesionales pueden consultar planes de pacientes",
+        )
+
+    _assert_paciente_existente(db, paciente_id)
+    q = db.query(PlanIA).filter(PlanIA.usuario_id == paciente_id)
+
+    tipo_norm = None
+    if tipo:
+        tipo_norm = tipo.strip().lower()
+        if tipo_norm not in _tipos_plan_validos():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="tipo invalido para plan",
+            )
+        _assert_permiso_plan_por_tipo(usuario_actual, tipo_norm)
+        q = q.filter(PlanIA.tipo == tipo_norm)
+
+    if activo is not None:
+        q = q.filter(PlanIA.activo == activo)
+
+    planes = q.order_by(PlanIA.fecha_inicio.desc()).all()
+    if tipo_norm is None:
+        rol_actual = _rol_actual(usuario_actual)
+        planes = [p for p in planes if rol_actual in _roles_permitidos_por_tipo_plan(p.tipo)]
+    return [_serializar_plan_ia(p) for p in planes]
+
+
+@app.post(
+    "/profesionales/pacientes/{paciente_id}/planes",
+    response_model=PlanIAResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def crear_plan_paciente_profesional(
+    paciente_id: int,
+    payload: PlanIACreateRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> PlanIAResponse:
+    """Crea o reemplaza una rutina IA de paciente desde rol profesional."""
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo profesionales pueden crear rutinas de pacientes",
+        )
+
+    tipo_norm = payload.tipo.strip().lower()
+    if payload.duracion_dias < 1 or payload.duracion_dias > 365:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="duracion_dias debe estar entre 1 y 365",
+        )
+    if tipo_norm not in _tipos_plan_validos():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="tipo invalido para plan",
+        )
+    _assert_permiso_plan_por_tipo(usuario_actual, tipo_norm)
+    _assert_paciente_existente(db, paciente_id)
+
+    ahora = datetime.utcnow()
+    db.query(PlanIA).filter(
+        PlanIA.usuario_id == paciente_id,
+        PlanIA.tipo == tipo_norm,
+        PlanIA.activo == True,  # noqa: E712
+    ).update({"activo": False})
+
+    plan = PlanIA(
+        usuario_id=paciente_id,
+        tipo=tipo_norm,
+        objetivo=payload.objetivo,
+        contenido=payload.contenido,
+        duracion_dias=payload.duracion_dias,
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=payload.duracion_dias),
+        activo=True,
+        notificacion_enviada=False,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return _serializar_plan_ia(plan)
+
+
+@app.put(
+    "/profesionales/pacientes/{paciente_id}/planes/{plan_id}",
+    response_model=PlanIAResponse,
+)
+def actualizar_plan_paciente_profesional(
+    paciente_id: int,
+    plan_id: int,
+    payload: PlanIAProfesionalUpdateRequest,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> PlanIAResponse:
+    """Permite editar una rutina existente de paciente (contenido, objetivo, duración, estado)."""
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo profesionales pueden editar rutinas de pacientes",
+        )
+
+    _assert_paciente_existente(db, paciente_id)
+    plan = db.query(PlanIA).filter(PlanIA.id == plan_id, PlanIA.usuario_id == paciente_id).first()
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Plan no encontrado",
+        )
+
+    _assert_permiso_plan_por_tipo(usuario_actual, plan.tipo)
+
+    if payload.duracion_dias is not None:
+        if payload.duracion_dias < 1 or payload.duracion_dias > 365:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="duracion_dias debe estar entre 1 y 365",
+            )
+        plan.duracion_dias = payload.duracion_dias
+        plan.fecha_fin = plan.fecha_inicio + timedelta(days=payload.duracion_dias)
+        plan.notificacion_enviada = False
+
+    if payload.objetivo is not None:
+        plan.objetivo = payload.objetivo
+    if payload.contenido is not None and payload.contenido.strip():
+        plan.contenido = payload.contenido
+
+    if payload.activo is not None:
+        if payload.activo:
+            db.query(PlanIA).filter(
+                PlanIA.usuario_id == paciente_id,
+                PlanIA.tipo == plan.tipo,
+                PlanIA.id != plan.id,
+                PlanIA.activo == True,  # noqa: E712
+            ).update({"activo": False})
+        plan.activo = payload.activo
+
+    db.commit()
+    db.refresh(plan)
+    return _serializar_plan_ia(plan)
+
+
+@app.delete(
+    "/profesionales/pacientes/{paciente_id}/planes/{plan_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def desactivar_plan_paciente_profesional(
+    paciente_id: int,
+    plan_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> None:
+    """Permite a profesional desactivar una rutina de un paciente."""
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo profesionales pueden eliminar rutinas de pacientes",
+        )
+
+    _assert_paciente_existente(db, paciente_id)
+    plan = db.query(PlanIA).filter(PlanIA.id == plan_id, PlanIA.usuario_id == paciente_id).first()
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Plan no encontrado",
+        )
+
+    _assert_permiso_plan_por_tipo(usuario_actual, plan.tipo)
+    plan.activo = False
+    db.commit()
+
+
+@app.get("/planes", response_model=List[PlanIAResponse])
+def listar_planes_ia(
+    activo: Optional[bool] = None,
+    tipo: Optional[str] = None,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[PlanIAResponse]:
+    """Lista todos los planes del usuario autenticado, con filtro opcional por activo/tipo."""
+    q = db.query(PlanIA).filter(PlanIA.usuario_id == usuario_actual.id)
+    if activo is not None:
+        q = q.filter(PlanIA.activo == activo)
+    if tipo:
+        q = q.filter(PlanIA.tipo == tipo)
+    planes = q.order_by(PlanIA.fecha_inicio.desc()).all()
+    return [_serializar_plan_ia(p) for p in planes]
+
+
+@app.get("/planes/activos", response_model=List[PlanIAResponse])
+def listar_planes_activos(
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[PlanIAResponse]:
+    """Devuelve los planes activos del usuario (un plan por tipo como máximo)."""
+    planes = (
+        db.query(PlanIA)
+        .filter(PlanIA.usuario_id == usuario_actual.id, PlanIA.activo == True)  # noqa: E712
+        .order_by(PlanIA.tipo.asc())
+        .all()
+    )
+    # Marcar automáticamente como inactivos los planes vencidos
+    ahora = datetime.utcnow()
+    actualizados = False
+    for plan in planes:
+        if plan.fecha_fin < ahora:
+            plan.activo = False
+            actualizados = True
+    if actualizados:
+        db.commit()
+    planes_activos = [p for p in planes if p.activo]
+    return [_serializar_plan_ia(p) for p in planes_activos]
+
+
+@app.delete("/planes/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+def cancelar_plan_ia(
+    plan_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> None:
+    """Cancela (desactiva) un plan activo del usuario."""
+    plan = db.query(PlanIA).filter(
+        PlanIA.id == plan_id,
+        PlanIA.usuario_id == usuario_actual.id,
+    ).first()
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan no encontrado")
+    plan.activo = False
+    db.commit()
+
+
+@app.get("/notificaciones/planes", response_model=List[NotificacionPlanResponse])
+def notificaciones_planes(
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[NotificacionPlanResponse]:
+    """
+    Devuelve alertas para planes que vencen en <=2 días o ya han vencido.
+    El frontend muestra estas notificaciones como banners o badges.
+    """
+    ahora = datetime.utcnow()
+    planes = (
+        db.query(PlanIA)
+        .filter(PlanIA.usuario_id == usuario_actual.id)
+        .all()
+    )
+
+    notificaciones: List[NotificacionPlanResponse] = []
+    tipos_nombre = {
+        "nutricion": "Nutrición",
+        "entrenamiento": "Entrenamiento",
+        "psicologia": "Psicología",
+    }
+
+    cambios = False
+    for plan in planes:
+        dias_restantes = (plan.fecha_fin - ahora).days
+        tipo_legible = tipos_nombre.get(plan.tipo, plan.tipo.capitalize())
+
+        if plan.fecha_fin < ahora and plan.activo:
+            # Plan vencido: se desactiva automáticamente.
+            plan.activo = False
+            cambios = True
+
+        if plan.fecha_fin < ahora and not plan.notificacion_enviada:
+            notificaciones.append(NotificacionPlanResponse(
+                plan_id=plan.id,
+                tipo=plan.tipo,
+                mensaje=f"Tu plan de {tipo_legible} ha terminado. ¿Quieres que te genere uno nuevo personalizado?",
+                dias_restantes=0,
+                urgente=True,
+            ))
+            plan.notificacion_enviada = True
+            cambios = True
+        elif plan.activo and dias_restantes <= 2:
+            dias_txt = "mañana" if dias_restantes <= 1 else f"en {dias_restantes} días"
+            notificaciones.append(NotificacionPlanResponse(
+                plan_id=plan.id,
+                tipo=plan.tipo,
+                mensaje=f"Tu plan de {tipo_legible} vence {dias_txt}. ¡Renuévalo para no perder continuidad!",
+                dias_restantes=max(0, dias_restantes),
+                urgente=dias_restantes <= 1,
+            ))
+
+    if cambios:
+        db.commit()
+
+    return notificaciones
+
+
+# ---------------------------------------------------------------------------
+# RESUMEN CLÍNICO IA — Especialistas obtienen análisis integral de un paciente
+# ---------------------------------------------------------------------------
+
+class ResumenClinicoIAResponse(BaseModel):
+    usuario_id: int
+    nombre_paciente: str
+    rol_solicitante: str
+    resumen_ia: str
+    alertas: List[str]
+    fecha_generacion: str
+
+
+def _detectar_alertas_clinicas(contexto: Dict[str, Any]) -> List[str]:
+    """Extrae alertas clínicas automáticas del contexto del paciente."""
+    alertas: List[str] = []
+    animo = contexto.get("animo_reciente")
+    imc = contexto.get("imc_actual")
+    if isinstance(animo, (int, float)):
+        if animo <= 3:
+            alertas.append(f"🔴 Ánimo muy bajo ({animo}/10) — posible riesgo emocional")
+        elif animo <= 5:
+            alertas.append(f"🟡 Ánimo moderado-bajo ({animo}/10) — seguimiento recomendado")
+    if isinstance(imc, (int, float)):
+        if imc >= 35:
+            alertas.append(f"🔴 IMC elevado ({imc}) — riesgo metabólico, valorar derivación médica")
+        elif imc >= 30:
+            alertas.append(f"🟡 IMC en rango obesidad I ({imc}) — ajuste de entrenamiento y nutrición")
+        elif imc < 18.5:
+            alertas.append(f"🔴 IMC bajo ({imc}) — riesgo nutricional, vigilar TCA")
+    ultimo_reg = contexto.get("fecha_ultimo_registro")
+    if ultimo_reg:
+        try:
+            dias_sin_reg = (datetime.utcnow().date() - datetime.fromisoformat(str(ultimo_reg)).date()).days
+            if dias_sin_reg > 7:
+                alertas.append(f"🟡 Sin registro desde hace {dias_sin_reg} días — baja adherencia")
+        except Exception:
+            pass
+    return alertas
+
+
+@app.get("/pacientes/{usuario_id}/resumen-ia", response_model=ResumenClinicoIAResponse)
+def resumen_clinico_ia_paciente(
+    usuario_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> ResumenClinicoIAResponse:
+    """
+    Genera un resumen clínico IA personalizado de un paciente para el especialista.
+    Solo accesible por profesionales (nutricionista, psicólogo, coach, médico, administrador).
+    Incluye: estado actual, alertas automáticas, recomendación de próxima intervención.
+    """
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo especialistas pueden acceder al resumen clínico IA de un paciente",
+        )
+    paciente = db.query(Usuario).filter(Usuario.id == usuario_id).first()
+    if not paciente:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado")
+
+    contexto = _contexto_usuario_para_ia(db, paciente)
+    alertas = _detectar_alertas_clinicas(contexto)
+    rol_solicitante = str(getattr(getattr(usuario_actual, "rol", None), "nombre", "especialista") or "especialista")
+
+    # Construir query específica para el rol del especialista
+    enfoque = {
+        "nutricionista": "diagnóstico nutricional, adherencia, riesgo de TCA, ajuste de macros y plan de intervención",
+        "psicologo": "estado emocional, técnicas recomendadas, riesgo psicológico, tareas terapéuticas y criterios de escalado",
+        "coach": "capacidad de entrenamiento, progresión, recuperación, fatiga y ajuste de carga",
+        "medico": "riesgos metabólicos, biométricas críticas, indicadores de derivación y seguridad clínica",
+        "administrador": "visión global: estado físico, emocional y nutricional con recomendación de coordinación interdisciplinar",
+    }.get(rol_solicitante, "estado general del paciente con recomendaciones de mejora en las 3 áreas")
+
+    query_ia = (
+        f"Genera un RESUMEN CLÍNICO BREVE de este paciente para un especialista en {rol_solicitante}. "
+        f"Enfoque: {enfoque}. "
+        "Incluye: 1) Estado actual resumido, 2) Punto crítico que merece atención inmediata, "
+        "3) Próxima intervención recomendada, 4) Coherencia entre las 3 áreas (nutrición, entrenamiento, psicología). "
+        "Máximo 300 palabras. Lenguaje clínico conciso."
+    )
+
+    try:
+        resultado = consultar_ia(
+            mensaje_usuario=query_ia,
+            historial_chat=[],
+            imagenes=[],
+            contexto_adicional=contexto,
+            tiene_multimedia=False,
+        )
+        resumen = str(resultado.get("respuesta") or "").strip()
+    except Exception:
+        logger.exception("Error al generar resumen clínico IA")
+        resumen = (
+            f"Paciente: {paciente.nombre} | "
+            f"IMC: {contexto.get('imc_actual', 'N/D')} | "
+            f"Ánimo: {contexto.get('animo_reciente', 'N/D')}/10. "
+            "No fue posible generar análisis IA en este momento. Consulta la ficha clínica directamente."
+        )
+
+    return ResumenClinicoIAResponse(
+        usuario_id=usuario_id,
+        nombre_paciente=paciente.nombre,
+        rol_solicitante=rol_solicitante,
+        resumen_ia=resumen,
+        alertas=alertas,
+        fecha_generacion=datetime.utcnow().isoformat(),
+    )
+
+
+@app.get("/mis-pacientes/alertas", response_model=List[Dict[str, Any]])
+def alertas_todos_mis_pacientes(
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    """
+    Devuelve resumen de alertas clínicas automáticas para TODOS los pacientes
+    del especialista autenticado (basado en las derivaciones activas hacia él).
+    Ideal para dashboard de especialista: ver de un vistazo qué pacientes necesitan atención.
+    """
+    if not _es_profesional(usuario_actual):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo especialistas pueden consultar alertas de pacientes",
+        )
+
+    # Obtener IDs de pacientes que tienen derivaciones activas hacia este especialista
+    derivaciones = (
+        db.query(Derivacion)
+        .filter(
+            Derivacion.especialista_id == usuario_actual.id,
+            Derivacion.estado.in_(["pendiente", "aceptada"]),
+        )
+        .all()
+    )
+    paciente_ids = list({d.paciente_id for d in derivaciones if d.paciente_id})
+
+    resultado: List[Dict[str, Any]] = []
+    for pid in paciente_ids:
+        paciente = db.query(Usuario).filter(Usuario.id == pid).first()
+        if not paciente:
+            continue
+        ctx = _contexto_usuario_para_ia(db, paciente)
+        alertas = _detectar_alertas_clinicas(ctx)
+        resultado.append({
+            "usuario_id": pid,
+            "nombre": paciente.nombre,
+            "imc": ctx.get("imc_actual"),
+            "animo": ctx.get("animo_reciente"),
+            "alertas": alertas,
+            "num_alertas": len(alertas),
+            "prioridad": "alta" if any("🔴" in a for a in alertas) else ("media" if alertas else "normal"),
+        })
+
+    # Ordenar por prioridad: alta → media → normal
+    prioridad_orden = {"alta": 0, "media": 1, "normal": 2}
+    resultado.sort(key=lambda x: prioridad_orden.get(str(x.get("prioridad")), 2))
+    return resultado
 
 
 if __name__ == "__main__":

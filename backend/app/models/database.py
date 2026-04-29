@@ -319,6 +319,9 @@ class MensajeChat(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    conversation_id = Column(String(80), nullable=True, index=True)
+    conversation_title = Column(String(160), nullable=True)
+    conversation_pinned = Column(Boolean, nullable=False, default=False)
     emisor = Column(String(20), nullable=False)
     texto = Column(Text, nullable=False)
     peso_registrado = Column(Numeric(5, 2), nullable=True)
@@ -532,4 +535,30 @@ class RecursoClinico(Base):
         return (
             f"<RecursoClinico(id={self.id}, trastorno={self.trastorno}, "
             f"especialidad={self.especialidad})>"
+        )
+
+
+class PlanIA(Base):
+    """Plan generado por la IA para un usuario (nutrición, entrenamiento o psicología) con duración y fechas."""
+
+    __tablename__ = "planes_ia"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    tipo = Column(String(30), nullable=False, index=True)  # nutricion | entrenamiento | psicologia
+    objetivo = Column(String(50), nullable=True)
+    contenido = Column(Text, nullable=False)
+    duracion_dias = Column(Integer, nullable=False, default=7)
+    fecha_inicio = Column(DateTime, nullable=False, default=datetime.utcnow)
+    fecha_fin = Column(DateTime, nullable=False)
+    activo = Column(Boolean, nullable=False, default=True)
+    notificacion_enviada = Column(Boolean, nullable=False, default=False)
+    fecha_creacion = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    usuario = relationship("Usuario", foreign_keys=[usuario_id])
+
+    def __repr__(self):
+        return (
+            f"<PlanIA(id={self.id}, usuario_id={self.usuario_id}, "
+            f"tipo={self.tipo}, duracion={self.duracion_dias}d, fin={self.fecha_fin})>"
         )
